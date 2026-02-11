@@ -1,0 +1,10 @@
+CREATE DATABASE IF NOT EXISTS esp32_monitor;
+
+USE esp32_monitor;
+
+CREATE TABLE IF NOT EXISTS sensor_data (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  temperature FLOAT,
+  voltage FLOAT,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
