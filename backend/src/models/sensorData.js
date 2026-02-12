@@ -6,7 +6,14 @@ class SensorData {
   }
 
   static async create(data) {
-    const result = await db('sensor_data').insert(data);
+    // Only insert fields that exist in the table
+    const insertData = {
+      temperature: data.temperature,
+      voltage: data.voltage,
+      fanOn: data.fanOn,
+      timestamp: data.timestamp || new Date()
+    };
+    const result = await db('sensor_data').insert(insertData);
     await this.updateLastUpdate();
     return result;
   }

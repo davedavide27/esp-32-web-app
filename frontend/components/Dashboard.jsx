@@ -70,6 +70,34 @@ const Dashboard = () => {
     }
   };
 
+  // Send a command to the ESP32 via backend
+  const sendLedCommand = async (action) => {
+    try {
+      await fetch(`${BACKEND_URL}/api/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      showNotification(`Sent command: ${action}`, 'info');
+    } catch (error) {
+      console.error('Error sending command:', error);
+      showNotification('Failed to send command', 'error');
+    }
+  };
+
+  // Helper to send an LED toggle for a specific LED index (1-3)
+  const sendLedToggle = (ledIndex, turnOn) => {
+    const action = `led${ledIndex}_${turnOn ? 'on' : 'off'}`;
+    const key = `led${ledIndex}`;
+    // mark pending until ESP acknowledges
+    setLedPending(prev => ({ ...prev, [key]: true }));
+    sendLedCommand(action);
+  };
+
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [ledStates, setLedStates] = useState({ led1: false, led2: false, led3: false });
+  const [ledPending, setLedPending] = useState({ led1: false, led2: false, led3: false });
+
   const clearData = () => {
     setRealTimeData([]);
     setLastUpdate(null);
@@ -81,26 +109,24 @@ const Dashboard = () => {
 
   const formatDataForChart = (data) => {
     return data.map((item) => ({
-      time: new Date(item.timestamp).toLocaleTimeString(),
-      temperature: parseFloat(item.temperature),
-      humidity1: parseFloat(item.humidity1),
-      temperature2: parseFloat(item.temperature2),
-      humidity2: parseFloat(item.humidity2),
-      current: parseFloat(item.current),
+      time: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
+      temperature: item.temperature == null || isNaN(item.temperature) ? 0 : parseFloat(item.temperature),
+      humidity1: item.humidity1 == null || isNaN(item.humidity1) ? 0 : parseFloat(item.humidity1),
+      voltage: item.voltage == null || isNaN(item.voltage) ? 0 : parseFloat(item.voltage),
+      fanOn: item.fanOn === 1 || item.fanOn === true || item.fanOn === 'true',
       timestamp: item.timestamp
     }));
   };
 
   const getCurrentValues = () => {
-    if (realTimeData.length === 0) return { temperature: 'N/A', humidity1: 'N/A', temperature2: 'N/A', humidity2: 'N/A', current: 'N/A' };
+    if (realTimeData.length === 0) return { temperature: 'N/A', humidity1: 'N/A', voltage: 'N/A', fanOn: 'N/A' };
     const latest = realTimeData[realTimeData.length - 1];
-    return {
-      temperature: `${latest.temperature}°C`,
-      humidity1: `${latest.humidity1}%`,
-      temperature2: `${latest.temperature2}°C`,
-      humidity2: `${latest.humidity2}%`,
-      current: `${latest.current}A`
-    };
+      return {
+        temperature: `${latest.temperature == null || isNaN(latest.temperature) ? 0 : latest.temperature}\u00b0C`,
+        humidity1: `${latest.humidity1 == null || isNaN(latest.humidity1) ? 0 : latest.humidity1}%`,
+        voltage: `${latest.voltage == null || isNaN(latest.voltage) ? 0 : latest.voltage}V`,
+        fanOn: latest.fanOn ? 'ON' : 'OFF'
+      };
   };
 
   const handleChartTypeChange = (type) => {
@@ -200,6 +226,37 @@ const Dashboard = () => {
       setSavedData(prevData => [...prevData.slice(-49), data]);
       setLastUpdate(new Date());
     });
+    
+    // Listen for command updates (optional)
+    newSocket.on('commandUpdate', (payload) => {
+      if (payload && payload.action) {
+        showNotification(`Command set: ${payload.action}`, 'info');
+      }
+    });
+
+    // Listen for ledStates updates
+    newSocket.on('ledStates', (states) => {
+      if (states) {
+        setLedStates(states);
+        // clear pending flags for leds present in the update
+        setLedPending(prev => {
+          const next = { ...prev };
+          Object.keys(states).forEach(k => { next[k] = false; });
+          return next;
+        });
+      }
+    });
+
+    // Fetch initial LED states
+    (async () => {
+      try {
+        const resp = await fetch(`${BACKEND_URL}/api/led-states`);
+        const json = await resp.json();
+        if (json && json.states) setLedStates(json.states);
+      } catch (err) {
+        console.error('Failed to fetch LED states', err);
+      }
+    })();
 
     fetchHistoricalData();
     fetchLastUpdate();
@@ -259,7 +316,43 @@ const Dashboard = () => {
             <span>Data Points:</span>
             <span>{savedData.length}</span>
           </div>
+          <div className="dashboard-status-info">
+            <span>Controls:</span>
+            <button className="chart-action-btn" onClick={() => setControlsOpen(true)}>Open Controls</button>
+          </div>
         </section>
+
+        {/* Controls Modal */}
+        {controlsOpen && (
+          <div className="controls-modal" style={{position: 'fixed', top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <div className="controls-modal-content" style={{background:'#fff',padding:20,borderRadius:8,width:320}}>
+              <h3>LED Controls</h3>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {[1,2,3].map(i => {
+                  const key = `led${i}`;
+                  const isOn = !!ledStates[key];
+                  const pending = !!ledPending[key];
+                  return (
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div>LED {i}</div>
+                    <div>
+                      <button
+                        className={`chart-action-btn ${isOn ? 'active' : ''}`}
+                        onClick={() => sendLedToggle(i, !isOn)}
+                        disabled={pending}
+                      >
+                        {pending ? 'Pending...' : (isOn ? 'Turn Off' : 'Turn On')}
+                      </button>
+                    </div>
+                  </div>
+                )})}
+              </div>
+              <div style={{textAlign:'right',marginTop:12}}>
+                <button className="chart-action-btn" onClick={() => setControlsOpen(false)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Current Values */}
         <section className="dashboard-current">
@@ -278,24 +371,17 @@ const Dashboard = () => {
             </div>
           </div>
           <div className="dashboard-current-card">
-            <Thermometer className="current-icon temp" />
+            <span className="current-icon fan" role="img" aria-label="Fan">🌰</span>
             <div>
-              <div className="current-label">Temperature 2</div>
-              <div className="current-value temp">{current.temperature2}</div>
+              <div className="current-label">Fan Knob</div>
+              <div className="current-value fan">{current.fanOn}</div>
             </div>
           </div>
           <div className="dashboard-current-card">
-            <Droplets className="current-icon hum" />
+            <Zap className="current-icon voltage" />
             <div>
-              <div className="current-label">Humidity 2</div>
-              <div className="current-value hum">{current.humidity2}</div>
-            </div>
-          </div>
-          <div className="dashboard-current-card">
-            <Zap className="current-icon current" />
-            <div>
-              <div className="current-label">Current</div>
-              <div className="current-value current">{current.current}</div>
+              <div className="current-label">Voltage</div>
+              <div className="current-value voltage">{current.voltage}</div>
             </div>
           </div>
         </section>
@@ -336,9 +422,8 @@ const Dashboard = () => {
                     <Legend />
                     <Line type="monotone" dataKey="temperature" stroke="#3b82f6" strokeWidth={2} dot={false} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
                     <Line type="monotone" dataKey="humidity1" stroke="#10b981" strokeWidth={2} dot={false} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
-                    <Line type="monotone" dataKey="temperature2" stroke="#f59e0b" strokeWidth={2} dot={false} name="Temp 2 (°C)" isAnimationActive={true} animationDuration={900} />
-                    <Line type="monotone" dataKey="humidity2" stroke="#ef4444" strokeWidth={2} dot={false} name="Humidity 2 (%)" isAnimationActive={true} animationDuration={900} />
-                    <Line type="monotone" dataKey="current" stroke="#8b5cf6" strokeWidth={2} dot={false} name="Current (A)" isAnimationActive={true} animationDuration={900} />
+                    
+                    <Line type="monotone" dataKey="voltage" stroke="#22d3ee" strokeWidth={2} dot={false} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
                   </LineChart>
                 )}
                 {chartType === 'bar' && (
@@ -350,9 +435,8 @@ const Dashboard = () => {
                     <Legend />
                     <Bar dataKey="temperature" fill="#3b82f6" name="Temperature (°C)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
                     <Bar dataKey="humidity1" fill="#10b981" name="Humidity 1 (%)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                    <Bar dataKey="temperature2" fill="#f59e0b" name="Temp 2 (°C)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                    <Bar dataKey="humidity2" fill="#ef4444" name="Humidity 2 (%)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                    <Bar dataKey="current" fill="#8b5cf6" name="Current (A)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
+                    
+                    <Bar dataKey="voltage" fill="#22d3ee" name="Voltage (V)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
                   </BarChart>
                 )}
                 {chartType === 'area' && (
@@ -366,6 +450,10 @@ const Dashboard = () => {
                         <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
                         <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                       </linearGradient>
+                      <linearGradient id="voltageArea" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
+                      </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
                     <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
@@ -374,9 +462,8 @@ const Dashboard = () => {
                     <Legend />
                     <Area type="monotone" dataKey="temperature" stroke="#3b82f6" fill="url(#tempArea)" fillOpacity={1} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
                     <Area type="monotone" dataKey="humidity1" stroke="#10b981" fill="url(#voltArea)" fillOpacity={1} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
-                    <Area type="monotone" dataKey="temperature2" stroke="#f59e0b" fill="url(#tempArea)" fillOpacity={1} name="Temp 2 (°C)" isAnimationActive={true} animationDuration={900} />
-                    <Area type="monotone" dataKey="humidity2" stroke="#ef4444" fill="url(#voltArea)" fillOpacity={1} name="Humidity 2 (%)" isAnimationActive={true} animationDuration={900} />
-                    <Area type="monotone" dataKey="current" stroke="#8b5cf6" fill="url(#tempArea)" fillOpacity={1} name="Current (A)" isAnimationActive={true} animationDuration={900} />
+                    
+                    <Area type="monotone" dataKey="voltage" stroke="#22d3ee" fill="url(#voltageArea)" fillOpacity={1} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
                   </AreaChart>
                 )}
               </ResponsiveContainer>
@@ -396,9 +483,8 @@ const Dashboard = () => {
                   <th>Date</th>
                   <th>Temperature (°C)</th>
                   <th>Humidity 1 (%)</th>
-                  <th>Temp 2 (°C)</th>
-                  <th>Humidity 2 (%)</th>
-                  <th>Current (A)</th>
+                  
+                  <th>Voltage (V)</th>
                 </tr>
               </thead>
               <tbody>
@@ -409,9 +495,7 @@ const Dashboard = () => {
                     <td>{new Date(data.timestamp).toLocaleDateString()}</td>
                     <td>{data.temperature}</td>
                     <td>{data.humidity1}</td>
-                    <td>{data.temperature2}</td>
-                    <td>{data.humidity2}</td>
-                    <td>{data.current}</td>
+                    <td>{data.voltage}</td>
                   </tr>
                 ))}
               </tbody>

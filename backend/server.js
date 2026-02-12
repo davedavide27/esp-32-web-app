@@ -21,6 +21,13 @@ SocketService.setIo(io);
 app.use(cors());
 app.use(express.json());
 
+// Initialize LED states from database
+SocketService.initializeLedStates().then(() => {
+  console.log('LED states initialized from database');
+}).catch(err => {
+  console.error('Failed to initialize LED states:', err);
+});
+
 // Use sensor routes
 app.use('/api', sensorRoutes);
 

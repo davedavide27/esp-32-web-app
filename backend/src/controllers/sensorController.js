@@ -29,20 +29,20 @@ class SensorController {
 
   static async receiveSensorData(req, res) {
     try {
-      const { temperature1, humidity1, temperature2, humidity2, current, motion, timestamp } = req.body;
 
-      // Validate data
-      if (temperature1 === undefined || humidity1 === undefined || temperature2 === undefined || humidity2 === undefined || current === undefined) {
-        return res.status(400).json({ error: 'Missing required sensor data fields' });
+      const { temperature1, humidity1, voltage, fanOn, motion, timestamp } = req.body;
+
+      // Accept null values for sensor fields, only require fanOn and timestamp
+      if (fanOn === undefined || timestamp === undefined) {
+        return res.status(400).json({ error: 'Missing required fields: fanOn or timestamp' });
       }
 
       const data = {
-        temperature: parseFloat(temperature1) || 0,
-        temperature1: parseFloat(temperature1) || 0,
-        humidity1: parseFloat(humidity1) || 0,
-        temperature2: parseFloat(temperature2) || 0,
-        humidity2: parseFloat(humidity2) || 0,
-        current: parseFloat(current) || 0,
+        temperature: temperature1 == null || isNaN(temperature1) ? null : parseFloat(temperature1),
+        temperature1: temperature1 == null || isNaN(temperature1) ? null : parseFloat(temperature1),
+        humidity1: humidity1 == null || isNaN(humidity1) ? null : parseFloat(humidity1),
+        voltage: voltage == null || isNaN(voltage) ? null : parseFloat(voltage),
+        fanOn: (fanOn === true || fanOn === 'true' || fanOn === 'on') ? 1 : 0,
         motion: motion === true || motion === 'true' ? 1 : 0,
         timestamp: new Date() // Use server time
       };
