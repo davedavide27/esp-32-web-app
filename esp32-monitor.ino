@@ -32,6 +32,10 @@ DHT dht2(DHTPIN2, DHTTYPE2);
 #define LED1_PIN 13
 #define LED2_PIN 12
 #define LED3_PIN 14
+#define BUTTON1_PIN 26
+#define BUTTON2_PIN 19
+#define BUTTON3_PIN 33
+#define BUTTON4_PIN 27
 float voltageSensor = 0.0;
 float voltageSensorRaw = 0.0;
 const float VOLTAGE_SMOOTHING_ALPHA = 0.4; // Smoothing factor (higher = faster, 0.4 for quick response)
@@ -51,12 +55,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 float temperature1 = 0.0;
 float humidity1 = 0.0;
-float temperature2 = 0.0;
-float humidity2 = 0.0;
 float current = 0.0;
 volatile bool motionDetected = false;
 bool motionToSend = false;
 bool wifiScanInProgress = false;  // Flag to prevent sensor broadcast during WiFi operations
+
+// Button1 state
+bool button1State = false; // false = OFF, true = ON
 
 
 
@@ -380,6 +385,11 @@ void setup() {
   digitalWrite(LED2_PIN, LOW);
   digitalWrite(LED3_PIN, LOW);
 
+  pinMode(BUTTON1_PIN, INPUT_PULLUP);
+  pinMode(BUTTON2_PIN, INPUT_PULLUP);
+  pinMode(BUTTON3_PIN, INPUT_PULLUP);
+  pinMode(BUTTON4_PIN, INPUT_PULLUP);
+
   // Initialize OLED display
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3C for 128x64
     Serial.println(F("SSD1306 allocation failed"));
@@ -472,44 +482,53 @@ void setup() {
 }
 
 void loop() {
-    // AC Voltage sensor reading with adjusted smoothing and knob detection
-    int voltageRawADC = analogRead(VOLTAGE_PIN);
-    voltageSensorRaw = voltageRawADC * 3.3 / 4095.0; // Convert ADC to voltage (adjust if using 5V ref)
-    voltageSensor = (VOLTAGE_SMOOTHING_ALPHA * voltageSensorRaw) + ((1.0 - VOLTAGE_SMOOTHING_ALPHA) * voltageSensor);
-
-    // Fan knob: ON is instant above 1.55V, OFF if voltage stays between 1.52V and 1.55V for 3s (30 consecutive samples)
-    static bool lastKnobState = false;
-    static int offConsecutiveInRange = 0;
-    static unsigned long lastSampleTime = 0;
-    bool knobNow = lastKnobState;
-    // Use millis() for precise 100ms sampling, independent of loop speed
-    if (voltageSensor > FAN_ON_THRESHOLD) {
-      knobNow = true;
-      offConsecutiveInRange = 0;
-    } else if (knobNow) {
-      unsigned long now = millis();
-      if (now - lastSampleTime >= 100) {
-        lastSampleTime = now;
-        if (voltageSensor >= FAN_OFF_LOW && voltageSensor <= FAN_OFF_HIGH) {
-          offConsecutiveInRange++;
-          if (offConsecutiveInRange >= FAN_OFF_SAMPLE_WINDOW) {
-            knobNow = false;
-            offConsecutiveInRange = 0;
-          }
-        } else {
-          offConsecutiveInRange = 0;
-        }
-      }
-    } else {
-      offConsecutiveInRange = 0;
+    // --- Button1 (GPIO 26): turn on LED1, others off with protection delay ---
+    if (digitalRead(BUTTON1_PIN) == LOW) {
+      led1State = true;
+      led2State = false;
+      led3State = false;
+      digitalWrite(LED2_PIN, LOW);
+      digitalWrite(LED3_PIN, LOW);
+      delay(100); // protection delay before turning on LED1
+      digitalWrite(LED1_PIN, HIGH);
+      Serial.println("Button1 pressed: LED1 ON, others OFF (with protection delay)");
+      delay(500); // crude debounce
     }
-    fanKnobOn = knobNow;
-    lastKnobState = knobNow;
-
-    Serial.print("MLE00983 AC Voltage Sensor (smoothed): ");
-    Serial.print(voltageSensor, 2);
-    Serial.print(" V | Fan knob: ");
-    Serial.println(fanKnobOn ? "ON" : "OFF");
+    // --- Button2 (GPIO 19): turn on LED2, others off with protection delay ---
+    if (digitalRead(BUTTON2_PIN) == LOW) {
+      led1State = false;
+      led2State = true;
+      led3State = false;
+      digitalWrite(LED1_PIN, LOW);
+      digitalWrite(LED3_PIN, LOW);
+      delay(100); // protection delay before turning on LED2
+      digitalWrite(LED2_PIN, HIGH);
+      Serial.println("Button2 pressed: LED2 ON, others OFF (with protection delay)");
+      delay(500); // crude debounce
+    }
+    // --- Button3 (GPIO 33): turn on LED3, others off with protection delay ---
+    if (digitalRead(BUTTON3_PIN) == LOW) {
+      led1State = false;
+      led2State = false;
+      led3State = true;
+      digitalWrite(LED1_PIN, LOW);
+      digitalWrite(LED2_PIN, LOW);
+      delay(100); // protection delay before turning on LED3
+      digitalWrite(LED3_PIN, HIGH);
+      Serial.println("Button3 pressed: LED3 ON, others OFF (with protection delay)");
+      delay(500); // crude debounce
+    }
+    // --- Button4 (GPIO 27): turn off all LEDs ---
+    if (digitalRead(BUTTON4_PIN) == LOW) {
+        led1State = false;
+        led2State = false;
+        led3State = false;
+        digitalWrite(LED1_PIN, LOW);
+        digitalWrite(LED2_PIN, LOW);
+        digitalWrite(LED3_PIN, LOW);
+        Serial.println("Button4 pressed: All LEDs OFF");
+        delay(500); // crude debounce
+    }
 
     // DHT and current sensor reads every 2 seconds (non-blocking)
     static unsigned long lastSensorRead = 0;
@@ -537,16 +556,10 @@ void loop() {
       }
       // Check if DHT11 readings are valid (not NaN)
       if (!isnan(newTemp2) && !isnan(newHum2)) {
-        temperature2 = newTemp2;
-        humidity2 = newHum2;
         Serial.print("DHT11 - Temperature: ");
-        Serial.print(temperature2);
         Serial.print(" °C, Humidity: ");
-        Serial.print(humidity2);
         Serial.println(" %");
       } else {
-        temperature2 = NAN;
-        humidity2 = NAN;
         Serial.println("Failed to read from DHT11 sensor! Setting values to null.");
       }
       // Read ACS712-5A current sensor data (GPIO 32) - powered from ESP32 3.3V
@@ -637,13 +650,25 @@ void loop() {
       client.println("Access-Control-Allow-Origin: *");
       client.println("");
 
+      // button1State is now global
       String jsonResponse = "{";
-      jsonResponse += "\"temperature1\":" + String(temperature1, 1) + ",";
-      jsonResponse += "\"humidity1\":" + String(humidity1, 1) + ",";
+      if (!isnan(temperature1)) {
+        jsonResponse += "\"temperature1\":" + String(temperature1, 1) + ",";
+      } else {
+        jsonResponse += "\"temperature1\":null,";
+      }
+      if (!isnan(humidity1)) {
+        jsonResponse += "\"humidity1\":" + String(humidity1, 1) + ",";
+      } else {
+        jsonResponse += "\"humidity1\":null,";
+      }
       jsonResponse += "\"fanOn\":" + String(fanKnobOn ? "true" : "false") + ",";
-      jsonResponse += "\"motion\":" + String(motionToSend ? "true" : "false");
+      jsonResponse += "\"motion\":" + String(motionToSend ? "true" : "false") + ",";
+      jsonResponse += "\"button1state\":" + String(button1State ? "true" : "false");
       jsonResponse += "}";
 
+      Serial.print("[DEBUG] /data JSON: ");
+      Serial.println(jsonResponse);
       client.println(jsonResponse);
     } else if (requestLine.indexOf("GET /wifi-scan") != -1) {
       // WiFi scan endpoint - prevents broadcasts during scan to avoid socket errors
@@ -907,8 +932,6 @@ void loop() {
       String htmlResponse = String(htmlPage);
       htmlResponse.replace("TEMPERATURE1", String(temperature1, 1));
       htmlResponse.replace("HUMIDITY1", String(humidity1, 1));
-      htmlResponse.replace("TEMPERATURE2", String(temperature2, 1));
-      htmlResponse.replace("HUMIDITY2", String(humidity2, 1));
 
       htmlResponse.replace("CURRENT", String(current, 2));
       htmlResponse.replace("VOLTAGE", String(voltageSensor, 2));

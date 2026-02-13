@@ -320,6 +320,8 @@ const Dashboard = () => {
             <span>Controls:</span>
             <button className="chart-action-btn" onClick={() => setControlsOpen(true)}>Open Controls</button>
           </div>
+          <div className="dashboard-status-info">
+          </div>
         </section>
 
         {/* Controls Modal */}
@@ -382,6 +384,69 @@ const Dashboard = () => {
             <div>
               <div className="current-label">Voltage</div>
               <div className="current-value voltage">{current.voltage}</div>
+            </div>
+          </div>
+          <div className="dashboard-current-card">
+            <div style={{display:'flex',alignItems:'center',gap:'1rem',width:'100%'}}>
+              <span
+                className="current-icon"
+                style={{
+                  background: (() => {
+                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                    if (onIdx === 1) return '#bbf7d0'; // green-200
+                    if (onIdx === 2) return '#fef9c3'; // yellow-100
+                    if (onIdx === 3) return '#fecaca'; // red-200
+                    return '#e5e7eb'; // gray-200
+                  })(),
+                  color: (() => {
+                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                    if (onIdx === 1) return '#22c55e'; // green-500
+                    if (onIdx === 2) return '#eab308'; // yellow-500
+                    if (onIdx === 3) return '#ef4444'; // red-500
+                    return '#6b7280'; // gray-500
+                  })(),
+                  fontWeight: 700,
+                  fontSize: '2rem',
+                  minWidth: '2.5rem',
+                  minHeight: '2.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '0.5rem',
+                  boxShadow: '0 1px 6px rgba(0,0,0,0.07)'
+                }}
+                title="LED State"
+              >
+                <svg width="1.5em" height="1.5em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="8" />
+                  <text x="12" y="16" textAnchor="middle" fontSize="10" fill="currentColor" fontWeight="bold">
+                    {(() => {
+                      const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                      if (!onIdx) return 'OFF';
+                      return onIdx;
+                    })()}
+                  </text>
+                </svg>
+              </span>
+              <div>
+                <div className="current-label">LED State</div>
+                <div className="current-value" style={{
+                  color: (() => {
+                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                    if (onIdx === 1) return '#22c55e';
+                    if (onIdx === 2) return '#eab308';
+                    if (onIdx === 3) return '#ef4444';
+                    return '#6b7280';
+                  })(),
+                  fontWeight: 700
+                }}>
+                  {(() => {
+                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                    if (!onIdx) return 'OFF';
+                    return `LED ${onIdx}`;
+                  })()}
+                </div>
+              </div>
             </div>
           </div>
         </section>

@@ -9,6 +9,7 @@ class SensorData {
     // Only insert fields that exist in the table
     const insertData = {
       temperature: data.temperature,
+      humidity1: data.humidity1,
       voltage: data.voltage,
       fanOn: data.fanOn,
       timestamp: data.timestamp || new Date()
@@ -38,9 +39,7 @@ class SensorData {
     const thresholds = {
       temperature: 2.0, // 2°C change
       humidity1: 5.0,   // 5% change
-      temperature2: 2.0, // 2°C change
-      humidity2: 5.0,   // 5% change
-      current: 0.5      // 0.5A change
+      voltage: 2.0      // 2V change
     };
 
     const currentTemp = parseFloat(currentData.temperature);
@@ -51,24 +50,14 @@ class SensorData {
     const baselineHum1 = parseFloat(latest.humidity1);
     const hum1Change = Math.abs(currentHum1 - baselineHum1);
 
-    const currentTemp2 = parseFloat(currentData.temperature2);
-    const baselineTemp2 = parseFloat(latest.temperature2);
-    const temp2Change = Math.abs(currentTemp2 - baselineTemp2);
-
-    const currentHum2 = parseFloat(currentData.humidity2);
-    const baselineHum2 = parseFloat(latest.humidity2);
-    const hum2Change = Math.abs(currentHum2 - baselineHum2);
-
-    const currentCurr = parseFloat(currentData.current);
-    const baselineCurr = parseFloat(latest.current);
-    const currChange = Math.abs(currentCurr - baselineCurr);
+    const currentVolt = parseFloat(currentData.voltage);
+    const baselineVolt = parseFloat(latest.voltage);
+    const voltChange = Math.abs(currentVolt - baselineVolt);
 
     // Check if any sensor has significant change
     return tempChange >= thresholds.temperature ||
            hum1Change >= thresholds.humidity1 ||
-           temp2Change >= thresholds.temperature ||
-           hum2Change >= thresholds.humidity2 ||
-           currChange >= thresholds.current;
+           voltChange >= thresholds.voltage;
   }
 
   static async createIfSignificantSpike(data) {
