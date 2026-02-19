@@ -18,10 +18,10 @@ class CommandController {
         // Emit to all clients
         SocketService.emitButtonStates();
       }
-      // Notify connected frontends
+      // Notify connected frontends immediately via WebSocket
       if (SocketService.io) SocketService.io.emit('commandUpdate', { action });
 
-      console.log('Command set:', action);
+      // Respond immediately
       res.json({ message: 'Command set' });
     } catch (error) {
       console.error('Error setting command:', error);
@@ -41,7 +41,9 @@ class CommandController {
 
   static async getCommand(req, res) {
     try {
-      const cmd = SocketService.getAndClearCommand();
+      // Do NOT clear the command here; just return it
+      const cmd = SocketService.currentCommand;
+      console.log('[DEBUG] /api/command polled. currentCommand =', cmd);
       res.json({ command: cmd || null });
     } catch (error) {
       console.error('Error getting command:', error);
@@ -52,30 +54,37 @@ class CommandController {
   static async postAck(req, res) {
     try {
       const { led, state } = req.body;
+      console.log('[DEBUG] /api/ack called. Body:', req.body, 'currentCommand:', SocketService.currentCommand);
       if (!led || typeof state === 'undefined') {
         return res.status(400).json({ error: 'led and state required' });
       }
 
       if (SocketService.ledStates && Object.prototype.hasOwnProperty.call(SocketService.ledStates, led)) {
         const newState = !!state;
-        SocketService.ledStates[led] = newState;
+        // Only update and persist if state actually changed
+        if (SocketService.ledStates[led] !== newState) {
+          SocketService.ledStates[led] = newState;
 
-        // Mutual exclusion: if a LED is turned ON, turn off all others
-        if (newState) {
-          Object.keys(SocketService.ledStates).forEach(key => {
-            if (key !== led) {
-              SocketService.ledStates[key] = false;
-            }
-          });
+          // Mutual exclusion: if a LED is turned ON, turn off all others
+          if (newState) {
+            Object.keys(SocketService.ledStates).forEach(key => {
+              if (key !== led) {
+                SocketService.ledStates[key] = false;
+              }
+            });
+          }
+
+          // Persist all LED states to database
+          for (const [ledKey, ledState] of Object.entries(SocketService.ledStates)) {
+            await SocketService.persistLedState(ledKey, ledState);
+          }
+
+          // Emit updated states to all clients
+          SocketService.emitLedStates();
         }
-
-        // Persist all LED states to database
-        for (const [ledKey, ledState] of Object.entries(SocketService.ledStates)) {
-          await SocketService.persistLedState(ledKey, ledState);
-        }
-
-        // Emit updated states to all clients
-        SocketService.emitLedStates();
+        // Clear the command ONLY after ACK from ESP32
+        const cleared = SocketService.getAndClearCommand();
+        console.log('[DEBUG] /api/ack: Cleared command:', cleared);
         return res.json({ message: 'ack received' });
       }
 

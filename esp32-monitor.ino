@@ -117,35 +117,41 @@ void applyLocalMutualExclusion(int ledNum) {
 
 // Helper: POST full LED state to server
 void postLedStatesSync() {
+  static bool lastLed1 = false, lastLed2 = false, lastLed3 = false;
   readLedStates();
-  WiFiClient stateClient;
-  if (stateClient.connect(webAppHost.c_str(), webAppPort)) {
-    String body = "{";
-    body += "\"states\":{";
-    body += "\"led1\":" + String(led1State ? "true" : "false") + ",";
-    body += "\"led2\":" + String(led2State ? "true" : "false") + ",";
-    body += "\"led3\":" + String(led3State ? "true" : "false");
-    body += "}";
+  // Only sync if state changed
+  if (led1State != lastLed1 || led2State != lastLed2 || led3State != lastLed3) {
+    WiFiClient stateClient;
+    if (stateClient.connect(webAppHost.c_str(), webAppPort)) {
+      String body = "{\"states\":{";
+      body += "\"led1\":" + String(led1State ? "true" : "false");
+      body += ",\"led2\":" + String(led2State ? "true" : "false");
+      body += ",\"led3\":" + String(led3State ? "true" : "false");
+      body += "}}";
 
-    stateClient.println("POST /api/led-states HTTP/1.1");
-    stateClient.print("Host: "); stateClient.print(webAppHost); stateClient.print(":"); stateClient.println(webAppPort);
-    stateClient.println("Content-Type: application/json");
-    stateClient.print("Content-Length: "); stateClient.println(body.length());
-    stateClient.println("Connection: close");
-    stateClient.println();
-    stateClient.println(body);
-    stateClient.flush();
+      stateClient.println("POST /api/led-states HTTP/1.1");
+      stateClient.print("Host: "); stateClient.print(webAppHost); stateClient.print(":"); stateClient.println(webAppPort);
+      stateClient.println("Content-Type: application/json");
+      stateClient.print("Content-Length: "); stateClient.println(body.length());
+      stateClient.println("Connection: close");
+      stateClient.println();
+      stateClient.println(body);
+      stateClient.flush();
 
-    unsigned long start = millis();
-    while (!stateClient.available() && (millis() - start < 500)) {
-      vTaskDelay(pdMS_TO_TICKS(10));
+      unsigned long start = millis();
+      while (!stateClient.available() && (millis() - start < 200)) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+      }
+      // discard response
+      while (stateClient.available()) {
+        stateClient.read();
+      }
+      stateClient.stop();
+      Serial.println(">>> LED states synced to server");
     }
-    // discard response
-    while (stateClient.available()) {
-      stateClient.read();
-    }
-    stateClient.stop();
-    Serial.println(">>> LED states synced to server");
+    lastLed1 = led1State;
+    lastLed2 = led2State;
+    lastLed3 = led3State;
   }
 }
 
@@ -201,24 +207,34 @@ void broadcastTask(void *pvParameters) {
         led3State = button3State;
         // Build JSON payload from latest sensor values (all property names quoted, all values valid JSON)
         String jsonPayload = "{";
-        jsonPayload += "\"temperature1\":";
+        jsonPayload += "\"temperature\":";
+        jsonPayload += (isnan(temperature1) ? "null" : String(temperature1, 1));
+        jsonPayload += ",\"temperature1\":";
         jsonPayload += (isnan(temperature1) ? "null" : String(temperature1, 1));
         jsonPayload += ",\"humidity1\":";
         jsonPayload += (isnan(humidity1) ? "null" : String(humidity1, 1));
         jsonPayload += ",\"voltage\":";
         jsonPayload += (isnan(voltageSensor) ? "null" : String(voltageSensor, 2));
         jsonPayload += ",\"fanOn\":";
-        jsonPayload += (fanKnobOn ? String("true") : String("false"));
+        jsonPayload += (fanKnobOn ? "true" : "false");
         jsonPayload += ",\"motion\":";
-        jsonPayload += (motionToSend ? String("true") : String("false"));
+        jsonPayload += (motionToSend ? "true" : "false");
+        jsonPayload += ",\"button1\":";
+        jsonPayload += (button1State ? "true" : "false");
+        jsonPayload += ",\"button2\":";
+        jsonPayload += (button2State ? "true" : "false");
+        jsonPayload += ",\"button3\":";
+        jsonPayload += (button3State ? "true" : "false");
+        jsonPayload += ",\"button4\":";
+        jsonPayload += (button4State ? "true" : "false");
+        jsonPayload += ",\"led1\":";
+        jsonPayload += (led1State ? "true" : "false");
+        jsonPayload += ",\"led2\":";
+        jsonPayload += (led2State ? "true" : "false");
+        jsonPayload += ",\"led3\":";
+        jsonPayload += (led3State ? "true" : "false");
         jsonPayload += ",\"timestamp\":";
         jsonPayload += String(millis());
-        jsonPayload += ",\"led1\":";
-        jsonPayload += (led1State ? String("true") : String("false"));
-        jsonPayload += ",\"led2\":";
-        jsonPayload += (led2State ? String("true") : String("false"));
-        jsonPayload += ",\"led3\":";
-        jsonPayload += (led3State ? String("true") : String("false"));
         jsonPayload += "}";
 
 
@@ -256,11 +272,12 @@ void broadcastTask(void *pvParameters) {
 
     // Periodically poll backend for commands (every 2s)
     static unsigned long lastCommandCheck = 0;
-    const unsigned long COMMAND_CHECK_INTERVAL = 2000;
+    const unsigned long COMMAND_CHECK_INTERVAL = 200;
     unsigned long now2 = millis();
     if ((WiFi.status() == WL_CONNECTED) && (now2 - lastCommandCheck >= COMMAND_CHECK_INTERVAL)) {
       lastCommandCheck = now2;
       WiFiClient cmdClient;
+      Serial.println("[DEBUG] Polling /api/command...");
       if (cmdClient.connect(webAppHost.c_str(), webAppPort)) {
         // Request pending command (server will clear it after returning)
         cmdClient.println("GET /api/command HTTP/1.1");
@@ -288,6 +305,9 @@ void broadcastTask(void *pvParameters) {
           char c = cmdClient.read();
           responseBody += c;
         }
+
+        Serial.print("[DEBUG] /api/command response: ");
+        Serial.println(responseBody);
 
         if (responseBody.length() > 0) {
           int p = responseBody.indexOf("\"command\"");
@@ -345,12 +365,16 @@ void broadcastTask(void *pvParameters) {
                       }
                       // Apply mutual exclusion: turn off others
                       applyLocalMutualExclusion(ledNum);
+                      // Immediately sync LED state to backend for instant frontend update
+                      postLedStatesSync();
                     } else {
                       digitalWrite(pin, LOW);
                       // Update in-memory state
                       if (ledNum == 1) { led1State = false; button1State = false; }
                       else if (ledNum == 2) { led2State = false; button2State = false; }
                       else if (ledNum == 3) { led3State = false; button3State = false; }
+                      // Immediately sync LED state to backend for instant frontend update
+                      postLedStatesSync();
                     }
                     Serial.print(">>> Command: LED");
                     Serial.print(ledNum);
@@ -465,19 +489,28 @@ void setup() {
 
   // Connect to WiFi (use STA mode for connecting)
   if (storedSSID.length() > 0 && storedPassword.length() > 0) {
+    WiFi.mode(WIFI_OFF); // Ensure clean state
+    delay(200);
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();  // Clear any previous connection attempts
-    delay(100);
+    WiFi.disconnect(true);  // Clear any previous connection attempts and turn off STA
+    delay(300);
     Serial.print("Attempting to connect to stored SSID: ");
     Serial.println(storedSSID);
+    wifiScanInProgress = true;
     WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
       delay(500);
       Serial.print(".");
       attempts++;
     }
     Serial.println();
+    wifiScanInProgress = false;
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.print("WiFi connection failed. Status: ");
+      Serial.println(WiFi.status());
+      Serial.println("WiFi connection failed: wrong credentials, network unavailable, or timeout.");
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -501,16 +534,20 @@ void setup() {
       storedSSID = "";
       storedPassword = "";
     }
+    wifiScanInProgress = false; // Ensure scan flag is reset on failure
     // Start AP in AP+STA mode so the web UI can scan/connect while AP is available
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("ESP32-Config", "password123");
-    delay(200);
+    delay(500); // Increased delay for AP to fully initialize
     Serial.println("AP mode started (AP+STA)");
     Serial.print("AP IP Address: ");
     Serial.println(WiFi.softAPIP());
   }
 
+  Serial.println("[DEBUG] Starting web server...");
+  delay(200); // Give WiFi stack a moment before starting server
   server.begin();
+  Serial.println("[DEBUG] Web server started.");
   // Sync LED state to server at boot
   if (WiFi.status() == WL_CONNECTED) {
     postLedStatesSync();
@@ -627,8 +664,87 @@ void loop() {
   // (Removed duplicate blocking button/LED logic. Only non-blocking, state-tracking logic remains above.)
 
   // --- Network/server, sensors, and web requests ---
+  static unsigned long lastSensorRead = 0;
+  static unsigned long lastAPCheck = 0;
+  static unsigned long lastLoopTime = 0;
+
+
+  // Non-blocking sensor read every 2 seconds
+  if (now - lastSensorRead >= 2000) {
+    lastSensorRead = now;
+    // Read DHT22 sensor data (GPIO 2)
+    float newTemp1 = dht1.readTemperature();
+    float newHum1 = dht1.readHumidity();
+    // Read DHT11 sensor data (GPIO 4)
+    float newTemp2 = dht2.readTemperature();
+    float newHum2 = dht2.readHumidity();
+    // Check if DHT22 readings are valid (not NaN)
+    if (!isnan(newTemp1) && !isnan(newHum1)) {
+      temperature1 = newTemp1;
+      humidity1 = newHum1;
+      Serial.print("DHT22 - Temperature: ");
+      Serial.print(temperature1);
+      Serial.print(" °C, Humidity: ");
+      Serial.print(humidity1);
+      Serial.println(" %");
+    } else {
+      temperature1 = NAN;
+      humidity1 = NAN;
+      Serial.println("Failed to read from DHT22 sensor! Setting values to null.");
+    }
+    // Check if DHT11 readings are valid (not NaN)
+    if (!isnan(newTemp2) && !isnan(newHum2)) {
+      Serial.print("DHT11 - Temperature: ");
+      Serial.print(" °C, Humidity: ");
+      Serial.println(" %");
+    } else {
+      Serial.println("Failed to read from DHT11 sensor! Setting values to null.");
+    }
+    // Read ACS712-5A current sensor data (GPIO 32) - powered from ESP32 3.3V
+    int numSamples = 10;
+    float totalVoltage = 0.0;
+    for (int i = 0; i < numSamples; i++) {
+      int adcValue = analogRead(CURRENT_PIN);
+      totalVoltage += adcValue * 3.3 / 4095.0;
+      vTaskDelay(10 / portTICK_PERIOD_MS);  // Small delay between readings (non-blocking)
+    }
+    float voltage = totalVoltage / numSamples;
+    if (voltage < 0.3 || voltage > 3.0) {
+      current = NAN;
+      Serial.println("ACS712-5A - Disconnected or invalid reading! Setting current to null.");
+    } else {
+      current = (voltage - 1.65) / 0.185;  // ACS712-5A: ~185 mV/A at 3.3V VCC, 1.65V at 0A
+      Serial.print("ACS712-5A - Current: ");
+      Serial.print(current, 2);
+      Serial.println(" A");
+    }
+  }
+
+  // Check PIR motion sensor data (GPIO 13) - using ISR for realtime detection
+  //Serial.print("PIR Motion Sensor - Motion Detected: ");
+  //Serial.println(motionDetected ? "Yes" : "No");
+  // Capture motion state before resetting
+  motionToSend = motionDetected;
+  // Update OLED display with motion status (add voltageSensor if desired)
+  updateOLED(temperature1, humidity1, NAN, NAN, NAN, motionDetected);
+  // Reset motion flag after reporting
+  motionDetected = false;
+
+  // Fallback: if STA is not connected and we're in STA mode, switch back to AP+STA for user access
+  if (now - lastAPCheck > 5000) {  // Check every 5 seconds
+    lastAPCheck = now;
+    if (WiFi.status() != WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
+      // STA is disconnected and AP is not running; restart AP+STA mode
+      Serial.println("STA disconnected. Switching to AP+STA mode for user access.");
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP("ESP32-Config", "password123");
+    }
+  }
+
+  // --- Web server: only handle one client per loop, non-blocking ---
   WiFiClient client = server.available();
   if (client) {
+    Serial.println("[DEBUG] Client connected.");
     String requestLine = client.readStringUntil('\r');
     client.readStringUntil('\n'); // consume \n
     // Read headers until blank line
@@ -725,354 +841,27 @@ void loop() {
 
   // Fallback: if STA is not connected and we're in STA mode, switch back to AP+STA for user access
   static unsigned long lastAPCheck = 0;
-  unsigned long now = millis();
-  if (now - lastAPCheck > 5000) {  // Check every 5 seconds
-    lastAPCheck = now;
-    if (WiFi.status() != WL_CONNECTED && WiFi.getMode() == WIFI_STA) {
-      // STA is disconnected and AP is not running; restart AP+STA mode
-      Serial.println("STA disconnected. Switching to AP+STA mode for user access.");
-      WiFi.mode(WIFI_AP_STA);
-      WiFi.softAP("ESP32-Config", "password123");
-    }
-  }
+  // --- Remove blocking delay at end of loop ---
+  // (No delay(500); here)
 
-  // Only read sensor every 0.5 seconds for more responsive updates
-  delay(500);
-
-  // Periodic LED state sync
+  // --- Periodic LED state sync (non-blocking) ---
   if (WiFi.status() == WL_CONNECTED) {
-    unsigned long now = millis();
     if (now - lastLedStateSyncTime > LED_STATE_SYNC_INTERVAL) {
       postLedStatesSync();
       lastLedStateSyncTime = now;
     }
   }
-
-  WiFiClient client = server.available();
-  if (client) {
-    String requestLine = client.readStringUntil('\r');
-    client.readStringUntil('\n'); // consume \n
-
-    // Read headers until blank line
-    String line = "";
-    while ((line = client.readStringUntil('\r')) != "") {
-      client.readStringUntil('\n'); // consume \n
-    }
-
-    // Now read body if POST
-    String body = "";
-    if (requestLine.indexOf("POST /wifi-connect") != -1) {
-      while (client.available()) {
-        body += (char)client.read();
-      }
-    }
-
-    bool clientStopped = false;  // Flag to prevent double client.stop()
-
-    // Process requests
-
-    if (requestLine.indexOf("GET /data") != -1) {
-      // Send JSON response for data endpoint
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: application/json");
-      client.println("Access-Control-Allow-Origin: *");
-      client.println("");
-
-      // Compose full state JSON
-      String jsonResponse = "{";
-      jsonResponse += "\"temperature1\":" + (isnan(temperature1) ? "null" : String(temperature1, 1)) + ",";
-      jsonResponse += "\"humidity1\":" + (isnan(humidity1) ? "null" : String(humidity1, 1)) + ",";
-      jsonResponse += "\"fanOn\":" + String(fanKnobOn ? "true" : "false") + ",";
-      jsonResponse += "\"motion\":" + String(motionToSend ? "true" : "false") + ",";
-      jsonResponse += "\"button1\":" + String(button1State ? "true" : "false") + ",";
-      jsonResponse += "\"button2\":" + String(button2State ? "true" : "false") + ",";
-      jsonResponse += "\"button3\":" + String(button3State ? "true" : "false") + ",";
-      jsonResponse += "\"button4\":" + String(button4State ? "true" : "false") + ",";
-      jsonResponse += "\"led1\":" + String(led1State ? "true" : "false") + ",";
-      jsonResponse += "\"led2\":" + String(led2State ? "true" : "false") + ",";
-      jsonResponse += "\"led3\":" + String(led3State ? "true" : "false");
-      jsonResponse += "}";
-
-      Serial.print("[DEBUG] /data JSON: ");
-      Serial.println(jsonResponse);
-      client.println(jsonResponse);
-    } else if (requestLine.indexOf("GET /wifi-scan") != -1) {
-      // WiFi scan endpoint - prevents broadcasts during scan to avoid socket errors
-      wifiScanInProgress = true;
-      Serial.println("Starting WiFi scan (broadcasts paused)...");
-      
-      // Ensure we're in AP+STA mode so AP stays active during scan
-      if (WiFi.getMode() != WIFI_AP_STA) {
-        Serial.println("Switching to AP+STA mode for scan");
-        WiFi.mode(WIFI_AP_STA);
-        delay(100);
-        WiFi.softAP("ESP32-Config", "password123");
-        delay(100);
-      }
-      
-      // Perform blocking scan instead of async to avoid interference with STA connection
-      // This is more reliable when already connected to WiFi
-      // show_hidden=true, passive=false
-      Serial.println("Scanning networks...");
-      int n = WiFi.scanNetworks(false, true, false);  // Blocking scan
-      
-      Serial.print("Scan completed. Found ");
-      Serial.print(n);
-      Serial.println(" networks");
-
-      // Handle case where scan failed
-      if (n == -1) {
-        Serial.println("Scan failed - returning empty results");
-        n = 0;  // Will return empty array
-      }
-
-      // Build JSON response while client is still connected
-      String jsonResponse = "[";
-      if (n > 0) {
-        for (int i = 0; i < n; ++i) {
-          if (i > 0) jsonResponse += ",";
-          // Escape quotes in SSID to prevent JSON breakage
-          String ssid = WiFi.SSID(i);
-          ssid.replace("\"", "\\\"");
-          jsonResponse += "{\"ssid\":\"" + ssid + "\",\"rssi\":" + String(WiFi.RSSI(i)) + ",\"encryption\":" + String(WiFi.encryptionType(i)) + "}";
-          Serial.print("Network: ");
-          Serial.print(WiFi.SSID(i));
-          Serial.print(" (");
-          Serial.print(WiFi.RSSI(i));
-          Serial.println(" dBm)");
-        }
-      }
-      jsonResponse += "]";
-      
-      // Send complete response with headers and body
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: application/json");
-      client.println("Content-Length: " + String(jsonResponse.length()));
-      client.println("Access-Control-Allow-Origin: *");
-      client.println("Connection: close");
-      client.println("");
-      client.print(jsonResponse);
-      client.flush();
-      delay(10);
-      
-      // Delete scan results to free memory
-      WiFi.scanDelete();
-      
-      // Ensure AP is still active after scan
-      if (WiFi.getMode() != WIFI_AP_STA) {
-        Serial.println("Restoring AP+STA mode after scan");
-        WiFi.mode(WIFI_AP_STA);
-        delay(100);
-        WiFi.softAP("ESP32-Config", "password123");
-        delay(100);
-      }
-      
-      wifiScanInProgress = false;
-      Serial.println("Scan completed and response sent. Broadcasts resumed.");
-
-
-
-
-    } else if (requestLine.indexOf("GET /wifi-status") != -1) {
-
-
-      // Return actual WiFi connection status
-      bool isConnected = (WiFi.status() == WL_CONNECTED);
-      String jsonResponse = "{";
-      jsonResponse += "\"connected\":" + String(isConnected ? "true" : "false") + ",";
-      jsonResponse += "\"ssid\":\"" + (isConnected ? WiFi.SSID() : "") + "\",";
-      jsonResponse += "\"ip\":\"" + (isConnected ? WiFi.localIP().toString() : "Not connected") + "\",";
-      jsonResponse += "\"storedSsid\":\"" + storedSSID + "\",";
-      jsonResponse += "\"mode\":\"" + String(WiFi.getMode() == WIFI_AP ? "AP" : (WiFi.getMode() == WIFI_STA ? "STA" : "AP_STA")) + "\"";
-      jsonResponse += "}";
-
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: application/json");
-      client.println("Access-Control-Allow-Origin: *");
-      client.println("");
-      client.println(jsonResponse);
-    } else if (requestLine.indexOf("POST /wifi-disconnect") != -1) {
-      // Disconnect from current WiFi and switch back to AP+STA mode
-      Serial.println("Disconnect requested...");
-      WiFi.disconnect(true);  // disconnect(true) also turns off STA
-      delay(300);  // Give WiFi stack time to clean up
-      
-      // Switch to AP+STA mode so AP becomes available for reconnection
-      WiFi.mode(WIFI_AP_STA);
-      delay(100);  // Wait for mode switch
-      WiFi.softAP("ESP32-Config", "password123");
-      delay(300);  // Wait for AP to fully initialize
-      Serial.println("Disconnected from WiFi. AP restarted in AP+STA mode.");
-      
-      String response = "Disconnected";
-      client.print("HTTP/1.1 200 OK\r\n");
-      client.print("Content-Type: text/plain\r\n");
-      client.print("Access-Control-Allow-Origin: *\r\n");
-      client.print("Content-Length: ");
-      client.print(response.length());
-      client.print("\r\n");
-      client.print("Connection: close\r\n");
-      client.print("\r\n");
-      client.print(response);
-      client.flush();
-    } else if (requestLine.indexOf("POST /wifi-connect") != -1) {
-
-      // Parse JSON body (simple parsing for ssid and password)
-      int ssidStart = body.indexOf("\"ssid\":\"") + 8;
-      int ssidEnd = body.indexOf("\"", ssidStart);
-      String newSSID = body.substring(ssidStart, ssidEnd);
-
-      int passStart = body.indexOf("\"password\":\"") + 12;
-      int passEnd = body.indexOf("\"", passStart);
-      String newPassword = body.substring(passStart, passEnd);
-
-      // Validate credentials before attempting connection
-      if (newSSID.length() == 0 || newSSID.length() > 32) {
-        Serial.println("Invalid SSID length. Aborting connection.");
-        String response = "Failed";
-        client.print("HTTP/1.1 200 OK\r\n");
-        client.print("Content-Type: text/plain\r\n");
-        client.print("Access-Control-Allow-Origin: *\r\n");
-        client.print("Content-Length: ");
-        client.print(response.length());
-        client.print("\r\n");
-        client.print("Connection: close\r\n");
-        client.print("\r\n");
-        client.print(response);
-        client.flush();
-      } else if (newPassword.length() > 63) {
-        Serial.println("Invalid password length. Aborting connection.");
-        String response = "Failed";
-        client.print("HTTP/1.1 200 OK\r\n");
-        client.print("Content-Type: text/plain\r\n");
-        client.print("Access-Control-Allow-Origin: *\r\n");
-        client.print("Content-Length: ");
-        client.print(response.length());
-        client.print("\r\n");
-        client.print("Connection: close\r\n");
-        client.print("\r\n");
-        client.print(response);
-        client.flush();
       } else {
-        // Store credentials persistently and update in-memory vars
-        preferences.putString("ssid", newSSID);
-        storedSSID = newSSID;
-        // Only overwrite stored password if a non-empty password was provided
-        if (newPassword.length() > 0) {
-          preferences.putString("password", newPassword);
-          storedPassword = newPassword;
-        }
-
-        // Try to connect using STA mode. Stop AP if active so STA can connect cleanly.
-        WiFi.mode(WIFI_STA);
-        WiFi.softAPdisconnect(true);
-        delay(300);  // Increased delay for proper AP shutdown
-
-        WiFi.disconnect();
-        delay(100);
-        // Use the stored password if an empty password was provided in the request
-        const char* pwToUse = (newPassword.length() > 0) ? newPassword.c_str() : storedPassword.c_str();
-        Serial.print("Attempting to connect to SSID: ");
-        Serial.print(newSSID);
-        Serial.println(" with provided credentials");
-        WiFi.begin(newSSID.c_str(), pwToUse);
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-          delay(500);
-          Serial.print(".");
-          attempts++;
-        }
-        Serial.println();
-
-        bool connected = (WiFi.status() == WL_CONNECTED);
-        if (connected) {
-          Serial.print("Successfully connected! IP: ");
-          Serial.println(WiFi.localIP());
-          // Switch to AP+STA mode to keep configuration interface available
-          WiFi.mode(WIFI_AP_STA);
-          delay(100);
-          WiFi.softAP("ESP32-Config", "password123");
-          delay(300);
-          Serial.println("AP+STA mode activated for continued configuration access");
-        } else {
-          Serial.println("Failed to connect. Clearing invalid credentials.");
-          // Connection failed, clear the bad credentials
-          preferences.remove("ssid");
-          preferences.remove("password");
-          storedSSID = "";
-          storedPassword = "";
-          // Switch back to AP+STA mode so user can retry
-          WiFi.mode(WIFI_AP_STA);
-          WiFi.softAP("ESP32-Config", "password123");
-          delay(300);
-        }
-        
-        String response = connected ? "Connected" : "Failed";
-        client.print("HTTP/1.1 200 OK\r\n");
-        client.print("Content-Type: text/plain\r\n");
-        client.print("Access-Control-Allow-Origin: *\r\n");
-        client.print("Content-Length: ");
-        client.print(response.length());
-        client.print("\r\n");
-        client.print("Connection: close\r\n");
-        client.print("\r\n");
-        client.print(response);
-        client.flush();
-      }
-    } else if (requestLine.indexOf("POST /wifi-forget") != -1) {
-      // Clear stored WiFi credentials
-      preferences.remove("ssid");
-      preferences.remove("password");
-      storedSSID = "";
-      storedPassword = "";
-      
-      // Disconnect from current WiFi and switch back to AP+STA mode
-      Serial.println("Forget WiFi credentials requested...");
-      WiFi.disconnect(true);  // disconnect(true) also turns off STA
-      delay(300);  // Give WiFi stack time to clean up
-      
-      WiFi.mode(WIFI_AP_STA);
-      delay(100);  // Wait for mode switch
-      WiFi.softAP("ESP32-Config", "password123");
-      delay(300);  // Wait for AP to fully initialize
-      Serial.println("WiFi credentials forgotten. AP restarted in AP+STA mode.");
-      
-      String response = "Forgotten";
-      client.print("HTTP/1.1 200 OK\r\n");
-      client.print("Content-Type: text/plain\r\n");
-      client.print("Access-Control-Allow-Origin: *\r\n");
-      client.print("Content-Length: ");
-      client.print(response.length());
-      client.print("\r\n");
-      client.print("Connection: close\r\n");
-      client.print("\r\n");
-      client.print(response);
-      client.flush();
-    } else {
-
-      // Send HTML response for main page
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: text/html");
-      client.println("");
-
-      String htmlResponse = String(htmlPage);
-      htmlResponse.replace("TEMPERATURE1", String(temperature1, 1));
-      htmlResponse.replace("HUMIDITY1", String(humidity1, 1));
-
-      htmlResponse.replace("CURRENT", String(current, 2));
-      htmlResponse.replace("VOLTAGE", String(voltageSensor, 2));
-      htmlResponse.replace("MOTION", motionToSend ? "Motion Detected" : "No Motion");
-
-      client.println(htmlResponse);
-    }
-
-    if (!clientStopped) {
-      delay(1);
-      client.stop();
+        // If for some reason no response was sent, send a default response
+      //  Serial.println("[DEBUG] No response sent, sending default 404.");
+        client.println("HTTP/1.1 404 Not Found");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("Not Found");
+        client.stop();
       }
    }
-  }
-}
 
 // PIR motion sensor ISR
 void IRAM_ATTR pirISR() {

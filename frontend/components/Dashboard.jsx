@@ -70,38 +70,34 @@ const Dashboard = () => {
     }
   };
 
-  // Send a command to the ESP32 via backend
+
+  // Send a command to the ESP32 via HTTP POST (not WebSocket)
   const sendLedCommand = async (action) => {
     try {
-      await fetch(`${BACKEND_URL}/api/command`, {
+      const resp = await fetch(`${BACKEND_URL}/api/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action })
       });
-      showNotification(`Sent command: ${action}`, 'info');
-    } catch (error) {
-      console.error('Error sending command:', error);
+      if (resp.ok) {
+        showNotification(`Sent command: ${action}`, 'info');
+      } else {
+        showNotification('Failed to send command', 'error');
+      }
+    } catch (err) {
       showNotification('Failed to send command', 'error');
+      console.error('Error sending command:', err);
     }
   };
 
-  // Helper to send an LED toggle for a specific LED index (1-3)
-  const sendLedToggle = async (ledIndex, turnOn) => {
+  // Helper to send an LED toggle for a specific LED index (1-3) via WebSocket, with instant optimistic update
+  const sendLedToggle = (ledIndex, turnOn) => {
     const action = `led${ledIndex}_${turnOn ? 'on' : 'off'}`;
     const key = `led${ledIndex}`;
-    // mark pending until ESP acknowledges
+    // Optimistically update UI immediately
     setLedPending(prev => ({ ...prev, [key]: true }));
-    await sendLedCommand(action);
-    // Wait for ESP32 to acknowledge and backend to update database
-    setTimeout(async () => {
-      try {
-        const resp = await fetch(`${BACKEND_URL}/api/led-states`);
-        const json = await resp.json();
-        if (json && json.states) setLedStates(json.states);
-      } catch (err) {
-        console.error('Failed to fetch LED states after toggle', err);
-      }
-    }, 600); // Wait 600ms for ESP32 to sync
+    setLedStates(prev => ({ ...prev, [key]: turnOn }));
+    sendLedCommand(action);
   };
 
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -465,14 +461,10 @@ const Dashboard = () => {
                   fontWeight: 700
                 }}>
                   {(() => {
-                    if (current.button4 === 'ON') return 'OFF';
-                    if (current.button1 === 'ON') return 'LED 1';
-                    if (current.button2 === 'ON') return 'LED 2';
-                    if (current.button3 === 'ON') return 'LED 3';
-                    // fallback to backend LED state if no manual control
+                    // Always show as "LED X ON" or "OFF" for consistency, using backend LED state as primary
                     const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
                     if (!onIdx) return 'OFF';
-                    return `LED ${onIdx}`;
+                    return `LED ${onIdx} ON`;
                   })()}
                 </div>
               </div>
