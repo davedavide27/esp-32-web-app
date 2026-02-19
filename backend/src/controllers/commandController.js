@@ -6,8 +6,18 @@ class CommandController {
       const { action } = req.body;
       if (!action) return res.status(400).json({ error: 'Missing action' });
 
-      // Accept simple actions like 'led_on' and 'led_off'
+      // Accept LED and button actions
       SocketService.setCommand(action);
+      // If it's a button press, update in-memory button state and emit to clients
+      if (/^button[1-4]_press$/.test(action)) {
+        const btnIdx = parseInt(action.match(/^button([1-4])_press$/)[1], 10);
+        // Set only the pressed button to true, others to false
+        const newButtonStates = { button1: false, button2: false, button3: false, button4: false };
+        newButtonStates[`button${btnIdx}`] = true;
+        SocketService.setButtonStates(newButtonStates);
+        // Emit to all clients
+        SocketService.emitButtonStates();
+      }
       // Notify connected frontends
       if (SocketService.io) SocketService.io.emit('commandUpdate', { action });
 
@@ -15,6 +25,16 @@ class CommandController {
       res.json({ message: 'Command set' });
     } catch (error) {
       console.error('Error setting command:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+  // New: get current button states
+  static async getButtonStates(req, res) {
+    try {
+      const states = SocketService.getButtonStates();
+      res.json({ states });
+    } catch (error) {
+      console.error('Error getting button states:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   }

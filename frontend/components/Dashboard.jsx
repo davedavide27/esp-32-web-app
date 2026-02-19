@@ -86,12 +86,22 @@ const Dashboard = () => {
   };
 
   // Helper to send an LED toggle for a specific LED index (1-3)
-  const sendLedToggle = (ledIndex, turnOn) => {
+  const sendLedToggle = async (ledIndex, turnOn) => {
     const action = `led${ledIndex}_${turnOn ? 'on' : 'off'}`;
     const key = `led${ledIndex}`;
     // mark pending until ESP acknowledges
     setLedPending(prev => ({ ...prev, [key]: true }));
-    sendLedCommand(action);
+    await sendLedCommand(action);
+    // Wait for ESP32 to acknowledge and backend to update database
+    setTimeout(async () => {
+      try {
+        const resp = await fetch(`${BACKEND_URL}/api/led-states`);
+        const json = await resp.json();
+        if (json && json.states) setLedStates(json.states);
+      } catch (err) {
+        console.error('Failed to fetch LED states after toggle', err);
+      }
+    }, 600); // Wait 600ms for ESP32 to sync
   };
 
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -119,14 +129,18 @@ const Dashboard = () => {
   };
 
   const getCurrentValues = () => {
-    if (realTimeData.length === 0) return { temperature: 'N/A', humidity1: 'N/A', voltage: 'N/A', fanOn: 'N/A' };
+    if (realTimeData.length === 0) return { temperature: 'N/A', humidity1: 'N/A', voltage: 'N/A', fanOn: 'N/A', button1: 'N/A', button2: 'N/A', button3: 'N/A', button4: 'N/A' };
     const latest = realTimeData[realTimeData.length - 1];
-      return {
-        temperature: `${latest.temperature == null || isNaN(latest.temperature) ? 0 : latest.temperature}\u00b0C`,
-        humidity1: `${latest.humidity1 == null || isNaN(latest.humidity1) ? 0 : latest.humidity1}%`,
-        voltage: `${latest.voltage == null || isNaN(latest.voltage) ? 0 : latest.voltage}V`,
-        fanOn: latest.fanOn ? 'ON' : 'OFF'
-      };
+    return {
+      temperature: `${latest.temperature == null || isNaN(latest.temperature) ? 0 : latest.temperature}\u00b0C`,
+      humidity1: `${latest.humidity1 == null || isNaN(latest.humidity1) ? 0 : latest.humidity1}%`,
+      voltage: `${latest.voltage == null || isNaN(latest.voltage) ? 0 : latest.voltage}V`,
+      fanOn: latest.fanOn ? 'ON' : 'OFF',
+      button1: latest.button1 ? 'ON' : 'OFF',
+      button2: latest.button2 ? 'ON' : 'OFF',
+      button3: latest.button3 ? 'ON' : 'OFF',
+      button4: latest.button4 ? 'ON' : 'OFF'
+    };
   };
 
   const handleChartTypeChange = (type) => {
@@ -334,20 +348,26 @@ const Dashboard = () => {
                   const key = `led${i}`;
                   const isOn = !!ledStates[key];
                   const pending = !!ledPending[key];
+                  // Color and status text
+                  const color = isOn ? (i === 1 ? '#22c55e' : i === 2 ? '#eab308' : '#ef4444') : '#6b7280';
+                  const bg = isOn ? (i === 1 ? '#bbf7d0' : i === 2 ? '#fef9c3' : '#fecaca') : '#e5e7eb';
+                  const status = isOn ? (i === 1 ? 'ON (Green)' : i === 2 ? 'ON (Yellow)' : 'ON (Red)') : 'OFF';
                   return (
-                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                    <div>LED {i}</div>
-                    <div>
-                      <button
-                        className={`chart-action-btn ${isOn ? 'active' : ''}`}
-                        onClick={() => sendLedToggle(i, !isOn)}
-                        disabled={pending}
-                      >
-                        {pending ? 'Pending...' : (isOn ? 'Turn Off' : 'Turn On')}
-                      </button>
+                    <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div style={{color, fontWeight:700}}>LED {i} <span style={{fontSize:'0.9em',color:'#6b7280'}}>({status})</span></div>
+                      <div>
+                        <button
+                          className={`chart-action-btn ${isOn ? 'active' : ''}`}
+                          style={{background:bg,color}}
+                          onClick={() => sendLedToggle(i, !isOn)}
+                          disabled={pending}
+                        >
+                          {pending ? 'Pending...' : (isOn ? 'Turn Off' : 'Turn On')}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )})}
+                  );
+                })}
               </div>
               <div style={{textAlign:'right',marginTop:12}}>
                 <button className="chart-action-btn" onClick={() => setControlsOpen(false)}>Close</button>
@@ -392,18 +412,17 @@ const Dashboard = () => {
                 className="current-icon"
                 style={{
                   background: (() => {
-                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
-                    if (onIdx === 1) return '#bbf7d0'; // green-200
-                    if (onIdx === 2) return '#fef9c3'; // yellow-100
-                    if (onIdx === 3) return '#fecaca'; // red-200
-                    return '#e5e7eb'; // gray-200
+                    // Priority: manual (button) control, then backend LED state
+                    if (current.button1 === 'ON' || ledStates.led1) return '#bbf7d0'; // green-200
+                    if (current.button2 === 'ON' || ledStates.led2) return '#fef9c3'; // yellow-100
+                    if (current.button3 === 'ON' || ledStates.led3) return '#fecaca'; // red-200
+                    return '#e5e7eb'; // gray-200 for OFF
                   })(),
                   color: (() => {
-                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
-                    if (onIdx === 1) return '#22c55e'; // green-500
-                    if (onIdx === 2) return '#eab308'; // yellow-500
-                    if (onIdx === 3) return '#ef4444'; // red-500
-                    return '#6b7280'; // gray-500
+                    if (current.button1 === 'ON' || ledStates.led1) return '#22c55e'; // green-500
+                    if (current.button2 === 'ON' || ledStates.led2) return '#eab308'; // yellow-500
+                    if (current.button3 === 'ON' || ledStates.led3) return '#ef4444'; // red-500
+                    return '#6b7280'; // gray-500 for OFF
                   })(),
                   fontWeight: 700,
                   fontSize: '2rem',
@@ -421,6 +440,11 @@ const Dashboard = () => {
                   <circle cx="12" cy="12" r="8" />
                   <text x="12" y="16" textAnchor="middle" fontSize="10" fill="currentColor" fontWeight="bold">
                     {(() => {
+                      if (current.button4 === 'ON') return 'OFF';
+                      if (current.button1 === 'ON') return 1;
+                      if (current.button2 === 'ON') return 2;
+                      if (current.button3 === 'ON') return 3;
+                      // fallback to backend LED state if no manual control
                       const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
                       if (!onIdx) return 'OFF';
                       return onIdx;
@@ -441,6 +465,11 @@ const Dashboard = () => {
                   fontWeight: 700
                 }}>
                   {(() => {
+                    if (current.button4 === 'ON') return 'OFF';
+                    if (current.button1 === 'ON') return 'LED 1';
+                    if (current.button2 === 'ON') return 'LED 2';
+                    if (current.button3 === 'ON') return 'LED 3';
+                    // fallback to backend LED state if no manual control
                     const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
                     if (!onIdx) return 'OFF';
                     return `LED ${onIdx}`;
@@ -550,6 +579,7 @@ const Dashboard = () => {
                   <th>Humidity 1 (%)</th>
                   
                   <th>Voltage (V)</th>
+
                 </tr>
               </thead>
               <tbody>

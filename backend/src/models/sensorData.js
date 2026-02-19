@@ -12,6 +12,10 @@ class SensorData {
       humidity1: data.humidity1,
       voltage: data.voltage,
       fanOn: data.fanOn,
+      button1: data.button1,
+      button2: data.button2,
+      button3: data.button3,
+      button4: data.button4,
       timestamp: data.timestamp || new Date()
     };
     const result = await db('sensor_data').insert(insertData);

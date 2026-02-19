@@ -7,15 +7,25 @@
 #include <Adafruit_SSD1306.h>
 #include <Preferences.h>
 
-// Local web app server details (change these to match your web app)
-const char* webAppHost = "192.168.10.102";  // IP address of your Windows machine on main network
-const int webAppPort = 5000;               // Port your web app is running on
+// Forward declarations for functions used before definition
+void updateOLED(float temp1, float hum1, float temp2, float hum2, float curr, bool motion);
+void IRAM_ATTR pirISR();
+
+// Web app server details (IP is now user-configurable)
+#define WEBAPP_PREFS_NAMESPACE "webapp"
+#define WEBAPP_IP_KEY "ip"
+String webAppHost = "192.168.10.102"; // Default, will be loaded from Preferences
+const int webAppPort = 5000;
 
 WiFiServer server(80);
 
 Preferences preferences;
 String storedSSID = "";
 String storedPassword = "";
+
+// --- State broadcast tracking ---
+String lastBroadcastJson = "";
+bool stateChanged = true;
 
 #define DHTPIN1 2
 #define DHTTYPE1 DHT22
@@ -42,7 +52,7 @@ const float VOLTAGE_SMOOTHING_ALPHA = 0.4; // Smoothing factor (higher = faster,
 // --- Fan knob detection additions ---
 const float FAN_ON_THRESHOLD = 1.55;  // Voltage above which knob is ON
 const float FAN_OFF_LOW = 1.52;       // Lower bound for OFF range
-const float FAN_OFF_HIGH = 1.55;      // Upper bound for OFF range
+const float FAN_OFF_HIGH = 1.55;      // Upper bound for OFF rang+e
 const int FAN_OFF_SAMPLE_WINDOW = 30; // Number of samples (3s at 100ms)
 const int FAN_OFF_SAMPLE_REQUIRED = 25; // Require at least 25/30 samples in range
 bool fanKnobOn = false;
@@ -60,44 +70,21 @@ volatile bool motionDetected = false;
 bool motionToSend = false;
 bool wifiScanInProgress = false;  // Flag to prevent sensor broadcast during WiFi operations
 
-// Button1 state
-bool button1State = false; // false = OFF, true = ON
-
-
-
-// ISR for PIR motion sensor
-void IRAM_ATTR pirISR() {
-  motionDetected = true;
-}
-
-// Function to update OLED display
-void updateOLED(float temp1, float hum1, float temp2, float hum2, float curr, bool motion) {
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.setTextSize(2);
-  display.println("Motion");
-  display.println("Detection");
-  display.println("");
-
-  display.setTextSize(3);
-  display.println(motion ? "YES" : "NO");
-
-  display.display();
-}
-
-// Global persistent connection to web app
-WiFiClient persistentClient;
-unsigned long lastBroadcastTime = 0;
-const unsigned long BROADCAST_INTERVAL = 500;  // Send every 500ms
-unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 10000;  // Wait 10 seconds between reconnect attempts
-unsigned long connectionEstablishedTime = 0;
-const unsigned long POST_CONNECT_DELAY = 500;  // Wait 500ms after connecting before sending
-
-// LED state tracking (mirrors actual GPIO state)
+// Button and LED state tracking (mirrors actual GPIO state)
+bool button1State = false;
+bool button2State = false;
+bool button3State = false;
+bool button4State = false;
 bool led1State = false;
 bool led2State = false;
 bool led3State = false;
+
+// --- Button debounce timing ---
+unsigned long lastButton1Time = 0;
+unsigned long lastButton2Time = 0;
+unsigned long lastButton3Time = 0;
+unsigned long lastButton4Time = 0;
+const unsigned long debounceDelay = 300; // ms
 unsigned long lastLedStateSyncTime = 0;
 const unsigned long LED_STATE_SYNC_INTERVAL = 5000;  // Sync every 5 seconds
 
@@ -132,13 +119,12 @@ void applyLocalMutualExclusion(int ledNum) {
 void postLedStatesSync() {
   readLedStates();
   WiFiClient stateClient;
-  if (stateClient.connect(webAppHost, webAppPort)) {
+  if (stateClient.connect(webAppHost.c_str(), webAppPort)) {
     String body = "{";
     body += "\"states\":{";
     body += "\"led1\":" + String(led1State ? "true" : "false") + ",";
     body += "\"led2\":" + String(led2State ? "true" : "false") + ",";
     body += "\"led3\":" + String(led3State ? "true" : "false");
-    body += "}";
     body += "}";
 
     stateClient.println("POST /api/led-states HTTP/1.1");
@@ -166,7 +152,14 @@ void postLedStatesSync() {
 // Background FreeRTOS task: sends sensor data to web app so HTTP server stays responsive
 void broadcastTask(void *pvParameters) {
   (void) pvParameters;
-  const TickType_t delayTicks = pdMS_TO_TICKS(BROADCAST_INTERVAL);
+  WiFiClient persistentClient;
+  unsigned long lastBroadcastTime = 0;
+  const unsigned long BROADCAST_INTERVAL = 500;  // Send every 500ms
+  unsigned long lastReconnectAttempt = 0;
+  const unsigned long RECONNECT_INTERVAL = 10000;  // Wait 10 seconds between reconnect attempts
+  unsigned long connectionEstablishedTime = 0;
+  const unsigned long POST_CONNECT_DELAY = 500;  // Wait 500ms after connecting before sending
+
   for (;;) {
     // Only operate when not scanning and WiFi connected
     if (WiFi.status() == WL_CONNECTED && !wifiScanInProgress) {
@@ -176,12 +169,22 @@ void broadcastTask(void *pvParameters) {
       if (!persistentClient.connected()) {
         if (now - lastReconnectAttempt > RECONNECT_INTERVAL) {
           Serial.println(">>> Reconnecting to web app server from task...");
-          persistentClient.setTimeout(5000);
-          if (!persistentClient.connect(webAppHost, webAppPort)) {
+          persistentClient.setTimeout(500); // Tight timeout
+          bool connected = persistentClient.connect(webAppHost.c_str(), webAppPort);
+          if (!connected) {
             Serial.println(">>> Task: failed to connect to web app server");
             lastReconnectAttempt = now;
-            persistentClient.stop();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            persistentClient.stop(); // Always free socket
+            // Socket exhaustion safeguard: if too many failures, delay longer
+            static int failCount = 0;
+            failCount++;
+            if (failCount > 10) {
+              Serial.println(">>> Too many failed connections, backing off");
+              vTaskDelay(pdMS_TO_TICKS(2000));
+              failCount = 0;
+            } else {
+              vTaskDelay(pdMS_TO_TICKS(200));
+            }
             continue;
           }
           Serial.println(">>> Task: connected to web app server");
@@ -192,41 +195,58 @@ void broadcastTask(void *pvParameters) {
 
       // Wait briefly after connect
       if (persistentClient.connected() && (millis() - connectionEstablishedTime) >= POST_CONNECT_DELAY) {
-        // Build JSON payload from latest sensor values
+        // Sync led state with button state before sending
+        led1State = button1State;
+        led2State = button2State;
+        led3State = button3State;
+        // Build JSON payload from latest sensor values (all property names quoted, all values valid JSON)
         String jsonPayload = "{";
-        jsonPayload += "\"temperature1\":" + (isnan(temperature1) ? "null" : String(temperature1, 1)) + ",";
-        jsonPayload += "\"humidity1\":" + (isnan(humidity1) ? "null" : String(humidity1, 1)) + ",";
-        jsonPayload += "\"voltage\":" + (isnan(voltageSensor) ? "null" : String(voltageSensor, 2)) + ",";
-        jsonPayload += "\"fanOn\":" + String(fanKnobOn ? "true" : "false") + ",";
-        jsonPayload += "\"motion\":" + String(motionToSend ? "true" : "false") + ",";
-        jsonPayload += "\"timestamp\":" + String(millis());
+        jsonPayload += "\"temperature1\":";
+        jsonPayload += (isnan(temperature1) ? "null" : String(temperature1, 1));
+        jsonPayload += ",\"humidity1\":";
+        jsonPayload += (isnan(humidity1) ? "null" : String(humidity1, 1));
+        jsonPayload += ",\"voltage\":";
+        jsonPayload += (isnan(voltageSensor) ? "null" : String(voltageSensor, 2));
+        jsonPayload += ",\"fanOn\":";
+        jsonPayload += (fanKnobOn ? String("true") : String("false"));
+        jsonPayload += ",\"motion\":";
+        jsonPayload += (motionToSend ? String("true") : String("false"));
+        jsonPayload += ",\"timestamp\":";
+        jsonPayload += String(millis());
+        jsonPayload += ",\"led1\":";
+        jsonPayload += (led1State ? String("true") : String("false"));
+        jsonPayload += ",\"led2\":";
+        jsonPayload += (led2State ? String("true") : String("false"));
+        jsonPayload += ",\"led3\":";
+        jsonPayload += (led3State ? String("true") : String("false"));
         jsonPayload += "}";
 
-        // Send as HTTP POST to keep server compatibility
-        persistentClient.println("POST /api/sensor-data HTTP/1.1");
-        persistentClient.print("Host: ");
-        persistentClient.print(webAppHost);
-        persistentClient.print(":" );
-        persistentClient.println(webAppPort);
-        persistentClient.println("Content-Type: application/json");
-        persistentClient.print("Content-Length: ");
-        persistentClient.println(jsonPayload.length());
-        persistentClient.println("Connection: keep-alive");
-        persistentClient.println();
-        persistentClient.println(jsonPayload);
-        persistentClient.flush();
 
-        // Minimal read to clear server response (non-blocking)
-        unsigned long readTimeout = millis();
-        while (persistentClient.available() && (millis() - readTimeout < 100)) {
-          String tmp = persistentClient.readStringUntil('\n');
-          (void)tmp;
-        }
-
-        // Periodic log
-        if (now - lastBroadcastTime > 2000) {
-          Serial.println(">>> Task: HTTP POST sent");
+        // Only send if state changed or interval elapsed
+        bool sendNow = stateChanged || (now - lastBroadcastTime > 2000);
+        if (sendNow && jsonPayload != lastBroadcastJson) {
+          persistentClient.println("POST /api/sensor-data HTTP/1.1");
+          persistentClient.print("Host: ");
+          persistentClient.print(webAppHost);
+          persistentClient.print(":" );
+          persistentClient.println(webAppPort);
+          persistentClient.println("Content-Type: application/json");
+          persistentClient.print("Content-Length: ");
+          persistentClient.println(jsonPayload.length());
+          persistentClient.println("Connection: keep-alive");
+          persistentClient.println();
+          persistentClient.println(jsonPayload);
+          persistentClient.flush();
+          // Minimal read to clear server response (non-blocking, max 30ms)
+          unsigned long readTimeout = millis();
+          while (persistentClient.available() && (millis() - readTimeout < 30)) {
+            String tmp = persistentClient.readStringUntil('\n');
+            (void)tmp;
+          }
+          lastBroadcastJson = jsonPayload;
+          stateChanged = false;
           lastBroadcastTime = now;
+          Serial.println(">>> Task: HTTP POST sent");
         }
       }
     } else {
@@ -241,7 +261,7 @@ void broadcastTask(void *pvParameters) {
     if ((WiFi.status() == WL_CONNECTED) && (now2 - lastCommandCheck >= COMMAND_CHECK_INTERVAL)) {
       lastCommandCheck = now2;
       WiFiClient cmdClient;
-      if (cmdClient.connect(webAppHost, webAppPort)) {
+      if (cmdClient.connect(webAppHost.c_str(), webAppPort)) {
         // Request pending command (server will clear it after returning)
         cmdClient.println("GET /api/command HTTP/1.1");
         cmdClient.print("Host: ");
@@ -301,17 +321,36 @@ void broadcastTask(void *pvParameters) {
                     if (cmd == "on") {
                       digitalWrite(pin, HIGH);
                       // Update in-memory state
-                      if (ledNum == 1) led1State = true;
-                      else if (ledNum == 2) led2State = true;
-                      else if (ledNum == 3) led3State = true;
+                      if (ledNum == 1) {
+                        led1State = true;
+                        button1State = true;
+                        led2State = false; button2State = false;
+                        led3State = false; button3State = false;
+                        digitalWrite(LED2_PIN, LOW);
+                        digitalWrite(LED3_PIN, LOW);
+                      } else if (ledNum == 2) {
+                        led2State = true;
+                        button2State = true;
+                        led1State = false; button1State = false;
+                        led3State = false; button3State = false;
+                        digitalWrite(LED1_PIN, LOW);
+                        digitalWrite(LED3_PIN, LOW);
+                      } else if (ledNum == 3) {
+                        led3State = true;
+                        button3State = true;
+                        led1State = false; button1State = false;
+                        led2State = false; button2State = false;
+                        digitalWrite(LED1_PIN, LOW);
+                        digitalWrite(LED2_PIN, LOW);
+                      }
                       // Apply mutual exclusion: turn off others
                       applyLocalMutualExclusion(ledNum);
                     } else {
                       digitalWrite(pin, LOW);
                       // Update in-memory state
-                      if (ledNum == 1) led1State = false;
-                      else if (ledNum == 2) led2State = false;
-                      else if (ledNum == 3) led3State = false;
+                      if (ledNum == 1) { led1State = false; button1State = false; }
+                      else if (ledNum == 2) { led2State = false; button2State = false; }
+                      else if (ledNum == 3) { led3State = false; button3State = false; }
                     }
                     Serial.print(">>> Command: LED");
                     Serial.print(ledNum);
@@ -320,7 +359,7 @@ void broadcastTask(void *pvParameters) {
                     // Send acknowledgement back to server with actual applied state
                     {
                       WiFiClient ackClient;
-                      if (ackClient.connect(webAppHost, webAppPort)) {
+                      if (ackClient.connect(webAppHost.c_str(), webAppPort)) {
                         String ledKey = "led" + String(ledNum);
                         bool appliedState = (cmd == "on");
                         String body = "{";
@@ -361,7 +400,7 @@ void broadcastTask(void *pvParameters) {
       }
     }
 
-    vTaskDelay(delayTicks);
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -371,6 +410,14 @@ void broadcastTask(void *pvParameters) {
 
 
 void setup() {
+    // Load web app IP from preferences
+    Preferences webappPrefs;
+    webappPrefs.begin(WEBAPP_PREFS_NAMESPACE, true);
+    String storedIp = webappPrefs.getString(WEBAPP_IP_KEY, "");
+    if (storedIp.length() > 0) {
+      webAppHost = storedIp;
+    }
+    webappPrefs.end();
   Serial.begin(115200);
   Serial.println("ESP32 Environmental Monitor starting...");
 
@@ -481,53 +528,134 @@ void setup() {
   );
 }
 
+// --- Web server handlers for web app IP (global scope) ---
+void handleSetWebAppIp(WiFiClient& client, String body) {
+  int ipStart = body.indexOf("\"ip\"");
+  if (ipStart < 0) { client.print("HTTP/1.1 400 Bad Request\r\n\r\n"); return; }
+  int colon = body.indexOf(":", ipStart);
+  int quote1 = body.indexOf('"', colon);
+  int quote2 = body.indexOf('"', quote1+1);
+  String ip = body.substring(quote1+1, quote2);
+  Preferences webappPrefs;
+  webappPrefs.begin(WEBAPP_PREFS_NAMESPACE, false);
+  webappPrefs.putString(WEBAPP_IP_KEY, ip);
+  webappPrefs.end();
+  webAppHost = ip;
+  client.print("HTTP/1.1 200 OK\r\n\r\nOK");
+}
+void handleGetWebAppIp(WiFiClient& client) {
+  client.print("HTTP/1.1 200 OK\r\n\r\n" + webAppHost);
+}
+// Main loop: manual controls and sensor reads are always responsive, regardless of web connection state
 void loop() {
-    // --- Button1 (GPIO 26): turn on LED1, others off with protection delay ---
-    if (digitalRead(BUTTON1_PIN) == LOW) {
-      led1State = true;
-      led2State = false;
-      led3State = false;
-      digitalWrite(LED2_PIN, LOW);
-      digitalWrite(LED3_PIN, LOW);
-      delay(100); // protection delay before turning on LED1
-      digitalWrite(LED1_PIN, HIGH);
-      Serial.println("Button1 pressed: LED1 ON, others OFF (with protection delay)");
-      delay(500); // crude debounce
+  unsigned long now = millis();
+  // --- Button/LED logic: always runs first, regardless of network/server state ---
+  bool prevButton1 = button1State;
+  bool prevButton2 = button2State;
+  bool prevButton3 = button3State;
+  bool prevButton4 = button4State;
+  if (digitalRead(BUTTON1_PIN) == LOW && now - lastButton1Time > debounceDelay) {
+    button1State = true;
+    button2State = false;
+    button3State = false;
+    button4State = false;
+    led1State = true;
+    led2State = false;
+    led3State = false;
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
+    delay(100); // protection delay before turning on LED1 (short, safe)
+    digitalWrite(LED1_PIN, HIGH);
+    Serial.println("Button1 pressed: LED1 ON, others OFF (with protection delay)");
+    lastButton1Time = now;
+    // Immediately sync LED state to server
+    if (WiFi.status() == WL_CONNECTED) postLedStatesSync();
+  }
+  if (digitalRead(BUTTON2_PIN) == LOW && now - lastButton2Time > debounceDelay) {
+    button1State = false;
+    button2State = true;
+    button3State = false;
+    button4State = false;
+    led1State = false;
+    led2State = true;
+    led3State = false;
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
+    delay(100); // protection delay before turning on LED2 (short, safe)
+    digitalWrite(LED2_PIN, HIGH);
+    Serial.println("Button2 pressed: LED2 ON, others OFF (with protection delay)");
+    lastButton2Time = now;
+    if (WiFi.status() == WL_CONNECTED) postLedStatesSync();
+  }
+  if (digitalRead(BUTTON3_PIN) == LOW && now - lastButton3Time > debounceDelay) {
+    button1State = false;
+    button2State = false;
+    button3State = true;
+    button4State = false;
+    led1State = false;
+    led2State = false;
+    led3State = true;
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, LOW);
+    delay(100); // protection delay before turning on LED3 (short, safe)
+    digitalWrite(LED3_PIN, HIGH);
+    Serial.println("Button3 pressed: LED3 ON, others OFF (with protection delay)");
+    lastButton3Time = now;
+    if (WiFi.status() == WL_CONNECTED) postLedStatesSync();
+  }
+  if (digitalRead(BUTTON4_PIN) == LOW && now - lastButton4Time > debounceDelay) {
+    button1State = false;
+    button2State = false;
+    button3State = false;
+    button4State = true;
+    led1State = false;
+    led2State = false;
+    led3State = false;
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
+    Serial.println("Button4 pressed: All LEDs OFF");
+    lastButton4Time = now;
+    if (WiFi.status() == WL_CONNECTED) postLedStatesSync();
+  }
+  // Only set stateChanged if any button state changed
+  if (prevButton1 != button1State || prevButton2 != button2State || prevButton3 != button3State || prevButton4 != button4State) {
+    stateChanged = true;
+  }
+  yield(); // Prevent WDT reset from long blocking delays
+
+  // (Removed duplicate blocking button/LED logic. Only non-blocking, state-tracking logic remains above.)
+
+  // --- Network/server, sensors, and web requests ---
+  WiFiClient client = server.available();
+  if (client) {
+    String requestLine = client.readStringUntil('\r');
+    client.readStringUntil('\n'); // consume \n
+    // Read headers until blank line
+    String line = "";
+    while ((line = client.readStringUntil('\r')) != "") {
+      client.readStringUntil('\n'); // consume \n
     }
-    // --- Button2 (GPIO 19): turn on LED2, others off with protection delay ---
-    if (digitalRead(BUTTON2_PIN) == LOW) {
-      led1State = false;
-      led2State = true;
-      led3State = false;
-      digitalWrite(LED1_PIN, LOW);
-      digitalWrite(LED3_PIN, LOW);
-      delay(100); // protection delay before turning on LED2
-      digitalWrite(LED2_PIN, HIGH);
-      Serial.println("Button2 pressed: LED2 ON, others OFF (with protection delay)");
-      delay(500); // crude debounce
+
+    // Now read body if POST
+    String body = "";
+    if (requestLine.indexOf("POST /wifi-connect") != -1) {
+      while (client.available()) {
+        body += (char)client.read();
+      }
     }
-    // --- Button3 (GPIO 33): turn on LED3, others off with protection delay ---
-    if (digitalRead(BUTTON3_PIN) == LOW) {
-      led1State = false;
-      led2State = false;
-      led3State = true;
-      digitalWrite(LED1_PIN, LOW);
-      digitalWrite(LED2_PIN, LOW);
-      delay(100); // protection delay before turning on LED3
-      digitalWrite(LED3_PIN, HIGH);
-      Serial.println("Button3 pressed: LED3 ON, others OFF (with protection delay)");
-      delay(500); // crude debounce
+
+    bool clientStopped = false;  // Flag to prevent double client.stop()
+
+    // --- Web app IP handlers ---
+    if (requestLine.indexOf("POST /set-webapp-ip") != -1) {
+      while (client.available()) body += (char)client.read();
+      handleSetWebAppIp(client, body);
+      return;
     }
-    // --- Button4 (GPIO 27): turn off all LEDs ---
-    if (digitalRead(BUTTON4_PIN) == LOW) {
-        led1State = false;
-        led2State = false;
-        led3State = false;
-        digitalWrite(LED1_PIN, LOW);
-        digitalWrite(LED2_PIN, LOW);
-        digitalWrite(LED3_PIN, LOW);
-        Serial.println("Button4 pressed: All LEDs OFF");
-        delay(500); // crude debounce
+    if (requestLine.indexOf("GET /get-webapp-ip") != -1) {
+      handleGetWebAppIp(client);
+      return;
     }
 
     // DHT and current sensor reads every 2 seconds (non-blocking)
@@ -650,21 +778,19 @@ void loop() {
       client.println("Access-Control-Allow-Origin: *");
       client.println("");
 
-      // button1State is now global
+      // Compose full state JSON
       String jsonResponse = "{";
-      if (!isnan(temperature1)) {
-        jsonResponse += "\"temperature1\":" + String(temperature1, 1) + ",";
-      } else {
-        jsonResponse += "\"temperature1\":null,";
-      }
-      if (!isnan(humidity1)) {
-        jsonResponse += "\"humidity1\":" + String(humidity1, 1) + ",";
-      } else {
-        jsonResponse += "\"humidity1\":null,";
-      }
+      jsonResponse += "\"temperature1\":" + (isnan(temperature1) ? "null" : String(temperature1, 1)) + ",";
+      jsonResponse += "\"humidity1\":" + (isnan(humidity1) ? "null" : String(humidity1, 1)) + ",";
       jsonResponse += "\"fanOn\":" + String(fanKnobOn ? "true" : "false") + ",";
       jsonResponse += "\"motion\":" + String(motionToSend ? "true" : "false") + ",";
-      jsonResponse += "\"button1state\":" + String(button1State ? "true" : "false");
+      jsonResponse += "\"button1\":" + String(button1State ? "true" : "false") + ",";
+      jsonResponse += "\"button2\":" + String(button2State ? "true" : "false") + ",";
+      jsonResponse += "\"button3\":" + String(button3State ? "true" : "false") + ",";
+      jsonResponse += "\"button4\":" + String(button4State ? "true" : "false") + ",";
+      jsonResponse += "\"led1\":" + String(led1State ? "true" : "false") + ",";
+      jsonResponse += "\"led2\":" + String(led2State ? "true" : "false") + ",";
+      jsonResponse += "\"led3\":" + String(led3State ? "true" : "false");
       jsonResponse += "}";
 
       Serial.print("[DEBUG] /data JSON: ");
@@ -943,6 +1069,25 @@ void loop() {
     if (!clientStopped) {
       delay(1);
       client.stop();
-    }
+      }
+   }
   }
+}
+
+// PIR motion sensor ISR
+void IRAM_ATTR pirISR() {
+  motionDetected = true;
+}
+
+// OLED update function (minimal implementation)
+void updateOLED(float temp1, float hum1, float temp2, float hum2, float curr, bool motion) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(2);
+  display.println("Motion");
+  display.println("Detection");
+  display.println("");
+  display.setTextSize(3);
+  display.println(motion ? "YES" : "NO");
+  display.display();
 }

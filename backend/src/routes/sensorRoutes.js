@@ -1,7 +1,11 @@
+
 const express = require('express');
 const router = express.Router();
 const sensorController = require('../controllers/sensorController');
 const commandController = require('../controllers/commandController');
+const buttonEventController = require('../controllers/buttonEventController');
+// GET /api/button-states - Return current button states for frontend
+router.get('/button-states', commandController.getButtonStates);
 
 // GET /api/sensor-data - Get historical sensor data
 router.get('/sensor-data', sensorController.getSensorData);
@@ -29,5 +33,11 @@ router.post('/led-states', commandController.postLedStates);
 
 // POST /api/ack - ESP32 posts acknowledgement for applied LED state
 router.post('/ack', commandController.postAck);
+
+// POST /api/button-event - Log a button event
+router.post('/button-event', buttonEventController.logButtonEvent);
+
+// GET /api/button-events - Fetch all button events
+router.get('/button-events', buttonEventController.getButtonEvents);
 
 module.exports = router;

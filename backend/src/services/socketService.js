@@ -1,11 +1,25 @@
 const SensorData = require('../models/sensorData');
 const db = require('../../config/database');
 
+
 class SocketService {
   static esp32LastPing = null;
   static currentCommand = null;
   static ledStates = { led1: false, led2: false, led3: false };
+  static buttonStates = { button1: false, button2: false, button3: false, button4: false };
   static ioInstance = null;
+  // Button state helpers
+  static setButtonStates(states) {
+    this.buttonStates = { ...states };
+  }
+  static getButtonStates() {
+    return this.buttonStates;
+  }
+  static emitButtonStates() {
+    if (this.io) {
+      this.io.emit('buttonStates', this.buttonStates);
+    }
+  }
 
   static handleConnection(io) {
     io.on('connection', (socket) => {
