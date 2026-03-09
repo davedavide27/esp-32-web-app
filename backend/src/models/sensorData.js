@@ -6,21 +6,24 @@ class SensorData {
   }
 
   static async create(data) {
-    // Only insert fields that exist in the table
-    const insertData = {
-      temperature: data.temperature,
-      humidity1: data.humidity1,
-      voltage: data.voltage,
-      fanOn: data.fanOn,
-      button1: data.button1,
-      button2: data.button2,
-      button3: data.button3,
-      button4: data.button4,
-      timestamp: data.timestamp || new Date()
-    };
-    const result = await db('sensor_data').insert(insertData);
-    await this.updateLastUpdate();
-    return result;
+      // Only insert fields that exist in the table
+      const insertData = {
+        temperature: data.temperature,
+        humidity1: data.humidity1,
+        voltage: data.voltage,
+        fanOn: data.fanOn,
+        button1: data.button1,
+        button2: data.button2,
+        button3: data.button3,
+        button4: data.button4,
+        motion: data.motion,
+        temperature1: data.temperature1,
+        ld2410cHumanPresent: data.ld2410cHumanPresent,
+        timestamp: data.timestamp || new Date()
+      };
+      const result = await db('sensor_data').insert(insertData);
+      await this.updateLastUpdate();
+      return result;
   }
 
   static async getLatest() {
@@ -43,7 +46,8 @@ class SensorData {
     const thresholds = {
       temperature: 2.0, // 2°C change
       humidity1: 5.0,   // 5% change
-      voltage: 2.0      // 2V change
+      voltage: 2.0,     // 2V change
+      ld2410cHumanPresent: 1 // boolean change
     };
 
     const currentTemp = parseFloat(currentData.temperature);
@@ -58,10 +62,15 @@ class SensorData {
     const baselineVolt = parseFloat(latest.voltage);
     const voltChange = Math.abs(currentVolt - baselineVolt);
 
+    const currentHuman = currentData.ld2410cHumanPresent ? 1 : 0;
+    const baselineHuman = latest.ld2410cHumanPresent ? 1 : 0;
+    const humanChange = Math.abs(currentHuman - baselineHuman);
+
     // Check if any sensor has significant change
     return tempChange >= thresholds.temperature ||
            hum1Change >= thresholds.humidity1 ||
-           voltChange >= thresholds.voltage;
+           voltChange >= thresholds.voltage ||
+           humanChange >= thresholds.ld2410cHumanPresent;
   }
 
   static async createIfSignificantSpike(data) {

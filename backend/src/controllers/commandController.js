@@ -14,6 +14,12 @@ class CommandController {
         // Set only the pressed button to true, others to false
         const newButtonStates = { button1: false, button2: false, button3: false, button4: false };
         newButtonStates[`button${btnIdx}`] = true;
+        // If web app controls are used (LED actions), always set button4 to 0
+        if (/^led[1-3]_(on|off)$/.test(action)) {
+          newButtonStates.button4 = false;
+          // Broadcast updated button states to ESP32
+          if (SocketService.io) SocketService.io.emit('buttonStates', newButtonStates);
+        }
         SocketService.setButtonStates(newButtonStates);
         // Emit to all clients
         SocketService.emitButtonStates();
@@ -28,7 +34,8 @@ class CommandController {
       res.status(500).json({ error: 'Internal server error' });
     }
   }
-  // New: get current button states
+
+  // GET /api/button-states - Return current button states for frontend and ESP32
   static async getButtonStates(req, res) {
     try {
       const states = SocketService.getButtonStates();
@@ -43,7 +50,7 @@ class CommandController {
     try {
       // Do NOT clear the command here; just return it
       const cmd = SocketService.currentCommand;
-      console.log('[DEBUG] /api/command polled. currentCommand =', cmd);
+      //console.log('[DEBUG] /api/command polled. currentCommand =', cmd);
       res.json({ command: cmd || null });
     } catch (error) {
       console.error('Error getting command:', error);

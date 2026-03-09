@@ -1,3 +1,91 @@
+// Custom Pagination Component (converted from provided JS)
+function Pagination({ pages, page, onPageChange }) {
+  let pageCutLow = page - 1;
+  let pageCutHigh = page + 1;
+  const items = [];
+  // Previous button (always visible, disabled if first page)
+  items.push(
+    <li className={"page-item previous no" + (page === 1 ? " disabled" : "") } key="prev">
+      <a
+        onClick={page === 1 ? undefined : () => onPageChange(page - 1)}
+        style={page === 1 ? { background: '#e5e7eb', color: '#9ca3af', cursor: 'not-allowed', pointerEvents: 'none' } : {}}
+        aria-disabled={page === 1}
+      >Previous</a>
+    </li>
+  );
+  if (pages < 6) {
+    for (let p = 1; p <= pages; p++) {
+      items.push(
+        <li className={page === p ? "active" : "no"} key={p}>
+          <a onClick={() => onPageChange(p)}>{p}</a>
+        </li>
+      );
+    }
+  } else {
+    if (page > 2) {
+      items.push(
+        <li className="no page-item" key={1}>
+          <a onClick={() => onPageChange(1)}>1</a>
+        </li>
+      );
+      if (page > 3) {
+        items.push(
+          <li className="out-of-range" key="start-ellipsis">
+            <a onClick={() => onPageChange(page - 2)}>...</a>
+          </li>
+        );
+      }
+    }
+    if (page === 1) {
+      pageCutHigh += 2;
+    } else if (page === 2) {
+      pageCutHigh += 1;
+    }
+    if (page === pages) {
+      pageCutLow -= 2;
+    } else if (page === pages - 1) {
+      pageCutLow -= 1;
+    }
+    for (let p = pageCutLow; p <= pageCutHigh; p++) {
+      if (p === 0) p = 1;
+      if (p > pages) continue;
+      items.push(
+        <li className={"page-item " + (page === p ? "active" : "no")} key={p}>
+          <a onClick={() => onPageChange(p)}>{p}</a>
+        </li>
+      );
+    }
+    if (page < pages - 1) {
+      if (page < pages - 2) {
+        items.push(
+          <li className="out-of-range" key="end-ellipsis">
+            <a onClick={() => onPageChange(page + 2)}>...</a>
+          </li>
+        );
+      }
+      items.push(
+        <li className="page-item no" key={pages}>
+          <a onClick={() => onPageChange(pages)}>{pages}</a>
+        </li>
+      );
+    }
+  }
+  // Next button (always visible, disabled if last page)
+  items.push(
+    <li className={"page-item next no" + (page === pages ? " disabled" : "") } key="next">
+      <a
+        onClick={page === pages ? undefined : () => onPageChange(page + 1)}
+        style={page === pages ? { background: '#e5e7eb', color: '#9ca3af', cursor: 'not-allowed', pointerEvents: 'none' } : {}}
+        aria-disabled={page === pages}
+      >Next</a>
+    </li>
+  );
+  return (
+    <div id="pagination">
+      <ul>{items}</ul>
+    </div>
+  );
+}
 import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, AreaChart, Area } from 'recharts';
@@ -5,6 +93,7 @@ import { Thermometer, Droplets, Activity, Wifi, WifiOff, RefreshCw, Trash2, BarC
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
 import '../src/styles/Dashboard.css';
+import { AnimatePresence, motion } from 'framer-motion';
 
 // Auto-detect backend server URL
 const getBackendUrl = () => {
@@ -70,7 +159,6 @@ const Dashboard = () => {
     }
   };
 
-
   // Send a command to the ESP32 via HTTP POST (not WebSocket)
   const sendLedCommand = async (action) => {
     try {
@@ -114,23 +202,43 @@ const Dashboard = () => {
   };
 
   const formatDataForChart = (data) => {
-    return data.map((item) => ({
-      time: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
-      temperature: item.temperature == null || isNaN(item.temperature) ? 0 : parseFloat(item.temperature),
-      humidity1: item.humidity1 == null || isNaN(item.humidity1) ? 0 : parseFloat(item.humidity1),
-      voltage: item.voltage == null || isNaN(item.voltage) ? 0 : parseFloat(item.voltage),
-      fanOn: item.fanOn === 1 || item.fanOn === true || item.fanOn === 'true',
-      timestamp: item.timestamp
-    }));
+    return data.map((item) => {
+      const radarValue = item.ld2410cHumanPresent == null ? 0 : parseInt(item.ld2410cHumanPresent);
+      return {
+        time: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'N/A',
+        temperature: item.temperature == null || isNaN(item.temperature) ? 0 : parseFloat(item.temperature),
+        humidity1: item.humidity1 == null || isNaN(item.humidity1) ? 0 : parseFloat(item.humidity1),
+        voltage: item.voltage == null || isNaN(item.voltage) ? 0 : parseFloat(item.voltage),
+        button1: item.button1,
+        button2: item.button2,
+        button3: item.button3,
+        button4: item.button4,
+        ld2410cHumanPresent: radarValue,
+        radar: radarValue === 1 ? 1 : 0,
+        radarLabel: radarValue === 1 ? 'Human Present' : 'None',
+        timestamp: item.timestamp
+      };
+    });
   };
 
   const getCurrentValues = () => {
-    if (realTimeData.length === 0) return { temperature: 'N/A', humidity1: 'N/A', voltage: 'N/A', fanOn: 'N/A', button1: 'N/A', button2: 'N/A', button3: 'N/A', button4: 'N/A' };
+    if (realTimeData.length === 0) return {
+      temperature: 'N/A',
+      humidity1: 'N/A',
+      voltage: 'N/A',
+      fanOn: 'N/A',
+      button1: 'N/A',
+      button2: 'N/A',
+      button3: 'N/A',
+      button4: 'N/A',
+      ld2410cHumanPresent: 'N/A'
+    };
     const latest = realTimeData[realTimeData.length - 1];
     return {
       temperature: `${latest.temperature == null || isNaN(latest.temperature) ? 0 : latest.temperature}\u00b0C`,
       humidity1: `${latest.humidity1 == null || isNaN(latest.humidity1) ? 0 : latest.humidity1}%`,
       voltage: `${latest.voltage == null || isNaN(latest.voltage) ? 0 : latest.voltage}V`,
+      ld2410cHumanPresent: latest.ld2410cHumanPresent === 1 || latest.ld2410cHumanPresent === true || latest.ld2410cHumanPresent === 'true' ? 'Human Present' : 'N/A',
       fanOn: latest.fanOn ? 'ON' : 'OFF',
       button1: latest.button1 ? 'ON' : 'OFF',
       button2: latest.button2 ? 'ON' : 'OFF',
@@ -285,7 +393,16 @@ const Dashboard = () => {
     };
   }, []);
 
-  const current = getCurrentValues();
+  const PAGE_SIZE = 10;
+  const [currentPage, setCurrentPage] = useState(1);
+  const paginatedData = savedData.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const totalPages = Math.max(1, Math.ceil(paginatedData.length / PAGE_SIZE));
+  const currentPageData = paginatedData.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+  };
+
+  const currentValues = getCurrentValues();
 
   return (
     <div className={`dashboard-root ${theme === 'dark' ? 'dark' : ''}`}> 
@@ -378,95 +495,102 @@ const Dashboard = () => {
             <Thermometer className="current-icon temp" />
             <div>
               <div className="current-label">Temperature</div>
-              <div className="current-value temp">{current.temperature}</div>
+              <div className="current-value temp">{currentValues.temperature}</div>
             </div>
           </div>
           <div className="dashboard-current-card">
             <Droplets className="current-icon hum" />
             <div>
               <div className="current-label">Humidity 1</div>
-              <div className="current-value hum">{current.humidity1}</div>
+              <div className="current-value hum">{currentValues.humidity1}</div>
             </div>
           </div>
           <div className="dashboard-current-card">
             <span className="current-icon fan" role="img" aria-label="Fan">🌰</span>
             <div>
               <div className="current-label">Fan Knob</div>
-              <div className="current-value fan">{current.fanOn}</div>
+              <div className="current-value fan">{currentValues.fanOn}</div>
             </div>
           </div>
           <div className="dashboard-current-card">
             <Zap className="current-icon voltage" />
             <div>
               <div className="current-label">Voltage</div>
-              <div className="current-value voltage">{current.voltage}</div>
+              <div className="current-value voltage">{currentValues.voltage}</div>
             </div>
           </div>
+          {/* LD2410C (Radar) as a separate card below Voltage */}
           <div className="dashboard-current-card">
-            <div style={{display:'flex',alignItems:'center',gap:'1rem',width:'100%'}}>
-              <span
-                className="current-icon"
-                style={{
-                  background: (() => {
-                    // Priority: manual (button) control, then backend LED state
-                    if (current.button1 === 'ON' || ledStates.led1) return '#bbf7d0'; // green-200
-                    if (current.button2 === 'ON' || ledStates.led2) return '#fef9c3'; // yellow-100
-                    if (current.button3 === 'ON' || ledStates.led3) return '#fecaca'; // red-200
-                    return '#e5e7eb'; // gray-200 for OFF
-                  })(),
-                  color: (() => {
-                    if (current.button1 === 'ON' || ledStates.led1) return '#22c55e'; // green-500
-                    if (current.button2 === 'ON' || ledStates.led2) return '#eab308'; // yellow-500
-                    if (current.button3 === 'ON' || ledStates.led3) return '#ef4444'; // red-500
-                    return '#6b7280'; // gray-500 for OFF
-                  })(),
-                  fontWeight: 700,
-                  fontSize: '2rem',
-                  minWidth: '2.5rem',
-                  minHeight: '2.5rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '0.5rem',
-                  boxShadow: '0 1px 6px rgba(0,0,0,0.07)'
-                }}
-                title="LED State"
-              >
-                <svg width="1.5em" height="1.5em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="8" />
-                  <text x="12" y="16" textAnchor="middle" fontSize="10" fill="currentColor" fontWeight="bold">
-                    {(() => {
-                      if (current.button4 === 'ON') return 'OFF';
-                      if (current.button1 === 'ON') return 1;
-                      if (current.button2 === 'ON') return 2;
-                      if (current.button3 === 'ON') return 3;
-                      // fallback to backend LED state if no manual control
-                      const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
-                      if (!onIdx) return 'OFF';
-                      return onIdx;
-                    })()}
-                  </text>
-                </svg>
-              </span>
-              <div>
-                <div className="current-label">LED State</div>
-                <div className="current-value" style={{
-                  color: (() => {
-                    const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
-                    if (onIdx === 1) return '#22c55e';
-                    if (onIdx === 2) return '#eab308';
-                    if (onIdx === 3) return '#ef4444';
-                    return '#6b7280';
-                  })(),
-                  fontWeight: 700
-                }}>
+            <span className="current-icon" role="img" aria-label="LD2410C">🛰️</span>
+            <div>
+              <div className="current-label">LD2410C (Radar)</div>
+              <div className="current-value">{currentValues.ld2410cHumanPresent}</div>
+            </div>
+          </div>
+          {/* LED State card remains after LD2410C */}
+          <div className="dashboard-current-card">
+            <span
+              className="current-icon"
+              style={{
+                background: (() => {
+                  // Priority: manual (button) control, then backend LED state
+                  if (currentValues.button1 === 'ON' || ledStates.led1) return '#bbf7d0'; // green-200
+                  if (currentValues.button2 === 'ON' || ledStates.led2) return '#fef9c3'; // yellow-100
+                  if (currentValues.button3 === 'ON' || ledStates.led3) return '#fecaca'; // red-200
+                  return '#e5e7eb'; // gray-200 for OFF
+                })(),
+                color: (() => {
+                  if (currentValues.button1 === 'ON' || ledStates.led1) return '#22c55e'; // green-500
+                  if (currentValues.button2 === 'ON' || ledStates.led2) return '#eab308'; // yellow-500
+                  if (currentValues.button3 === 'ON' || ledStates.led3) return '#ef4444'; // red-500
+                  return '#6b7280'; // gray-500 for OFF
+                })(),
+                fontWeight: 700,
+                fontSize: '2rem',
+                minWidth: '2.5rem',
+                minHeight: '2.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '0.5rem',
+                boxShadow: '0 1px 6px rgba(0,0,0,0.07)'
+              }}
+              title="LED State"
+            >
+              <svg width="1.5em" height="1.5em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="8" />
+                <text x="12" y="16" textAnchor="middle" fontSize="10" fill="currentColor" fontWeight="bold">
                   {(() => {
-                    // Always show as "LED X ON" or "OFF" for consistency, using backend LED state as primary
+                    if (currentValues.button4 === 'ON') return 'OFF';
+                    if (currentValues.button1 === 'ON') return 1;
+                    if (currentValues.button2 === 'ON') return 2;
+                    if (currentValues.button3 === 'ON') return 3;
+                    // fallback to backend LED state if no manual control
                     const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
                     if (!onIdx) return 'OFF';
-                    return `LED ${onIdx} ON`;
+                    return onIdx;
                   })()}
-                </div>
+                </text>
+              </svg>
+            </span>
+            <div>
+              <div className="current-label">LED State</div>
+              <div className="current-value" style={{
+                color: (() => {
+                  const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                  if (onIdx === 1) return '#22c55e';
+                  if (onIdx === 2) return '#eab308';
+                  if (onIdx === 3) return '#ef4444';
+                  return '#6b7280';
+                })(),
+                fontWeight: 700
+              }}>
+                {(() => {
+                  // Always show as "LED X ON" or "OFF" for consistency, using backend LED state as primary
+                  const onIdx = [1,2,3].find(i => ledStates[`led${i}`]);
+                  if (!onIdx) return 'OFF';
+                  return `LED ${onIdx} ON`;
+                })()}
               </div>
             </div>
           </div>
@@ -492,69 +616,177 @@ const Dashboard = () => {
               <button onClick={clearData} className="chart-action-btn danger"><Trash2 className="chart-action-icon" />Clear</button>
             </div>
           </div>
-          <div ref={chartRef} className="dashboard-chart-area">
-            {isLoading ? (
-              <div className="dashboard-loading">Loading...</div>
-            ) : savedData.length === 0 ? (
-              <div className="dashboard-nodata">No data available. Waiting for ESP32 connection...</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={320}>
-                {chartType === 'line' && (
-                  <LineChart data={formatDataForChart(savedData)}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
-                    <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <Tooltip contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }} />
-                    <Legend />
-                    <Line type="monotone" dataKey="temperature" stroke="#3b82f6" strokeWidth={2} dot={false} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
-                    <Line type="monotone" dataKey="humidity1" stroke="#10b981" strokeWidth={2} dot={false} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
-                    
-                    <Line type="monotone" dataKey="voltage" stroke="#22d3ee" strokeWidth={2} dot={false} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
-                  </LineChart>
-                )}
-                {chartType === 'bar' && (
-                  <BarChart data={formatDataForChart(savedData)}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
-                    <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <Tooltip contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }} />
-                    <Legend />
-                    <Bar dataKey="temperature" fill="#3b82f6" name="Temperature (°C)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                    <Bar dataKey="humidity1" fill="#10b981" name="Humidity 1 (%)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                    
-                    <Bar dataKey="voltage" fill="#22d3ee" name="Voltage (V)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
-                  </BarChart>
-                )}
-                {chartType === 'area' && (
-                  <AreaChart data={formatDataForChart(savedData)}>
-                    <defs>
-                      <linearGradient id="tempArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="voltArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="voltageArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
-                    <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
-                    <Tooltip contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }} />
-                    <Legend />
-                    <Area type="monotone" dataKey="temperature" stroke="#3b82f6" fill="url(#tempArea)" fillOpacity={1} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
-                    <Area type="monotone" dataKey="humidity1" stroke="#10b981" fill="url(#voltArea)" fillOpacity={1} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
-                    
-                    <Area type="monotone" dataKey="voltage" stroke="#22d3ee" fill="url(#voltageArea)" fillOpacity={1} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
-                  </AreaChart>
-                )}
-              </ResponsiveContainer>
-            )}
-          </div>
+          {/* Chart Pagination Logic */}
+          {(() => {
+            const chartPageSize = 10;
+            const chartTotalPages = Math.max(1, Math.ceil(savedData.length / chartPageSize));
+            const [chartPage, setChartPage] = React.useState(1);
+            const [animating, setAnimating] = React.useState(false);
+            // Sort data from newest to oldest
+            const chartFormattedData = formatDataForChart([...savedData].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+            const chartPageData = chartFormattedData.slice((chartPage - 1) * chartPageSize, chartPage * chartPageSize);
+            // Animation logic
+            const handlePageChange = (newPage) => {
+              if (newPage < 1 || newPage > chartTotalPages || newPage === chartPage) return;
+              setAnimating(true);
+              setTimeout(() => {
+                setChartPage(newPage);
+                setAnimating(false);
+              }, 250);
+            };
+            return (
+              <>
+                <div style={{overflowX: 'auto', whiteSpace: 'nowrap'}}>
+                  <div
+                    ref={chartRef}
+                    className="dashboard-chart-area"
+                    style={{
+                      minWidth: '320px',
+                      width: '100%',
+                      maxWidth: '100vw',
+                      transition: animating ? 'opacity 0.25s' : undefined,
+                      opacity: animating ? 0.5 : 1,
+                      boxSizing: 'border-box',
+                      background: theme === 'dark' ? '#18181b' : '#f9fafb',
+                      borderRadius: 16,
+                      boxShadow: theme === 'dark' ? '0 2px 8px #23272f' : '0 2px 8px #e0e7ff',
+                      padding: '16px 8px',
+                      overflowX: 'auto',
+                      overflowY: 'visible',
+                      border: 'none',
+                    }}
+                  >
+                    {isLoading ? (
+                      <div className="dashboard-loading">Loading...</div>
+                    ) : savedData.length === 0 ? (
+                      <div className="dashboard-nodata">No data available. Waiting for ESP32 connection...</div>
+                    ) : (
+                      <ResponsiveContainer width="100%" minWidth={320} height={320}>
+                        {chartType === 'line' && (
+                          <LineChart data={chartPageData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
+                            <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }}
+                              formatter={(value, name, props) => {
+                                if (name === 'Radar') {
+                                  return [props.payload.radarLabel, 'Radar'];
+                                }
+                                return [value, name];
+                              }}
+                            />
+                            <Legend />
+                            <Line type="monotone" dataKey="temperature" stroke="#3b82f6" strokeWidth={2} dot={false} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
+                            <Line type="monotone" dataKey="humidity1" stroke="#10b981" strokeWidth={2} dot={false} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
+                            <Line
+                              type="stepAfter"
+                              dataKey="radar"
+                              stroke="#e11d48" // More vivid color
+                              strokeWidth={4}
+                              strokeDasharray="6 3"
+                              dot={{ r: 6, stroke: '#e11d48', strokeWidth: 2, fill: '#fff' }}
+                              name="Radar"
+                              legendType="diamond"
+                              isAnimationActive={true}
+                              animationDuration={900}
+                            />
+                            <Line type="monotone" dataKey="voltage" stroke="#22d3ee" strokeWidth={2} dot={false} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
+                          </LineChart>
+                        )}
+                        {chartType === 'bar' && (
+                          <BarChart data={chartPageData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
+                            <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }}
+                              formatter={(value, name, props) => {
+                                if (name === 'Radar') {
+                                  return [props.payload.radarLabel, 'Radar'];
+                                }
+                                return [value, name];
+                              }}
+                            />
+                            <Legend />
+                            <Bar dataKey="temperature" fill="#3b82f6" name="Temperature (°C)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
+                            <Bar dataKey="humidity1" fill="#10b981" name="Humidity 1 (%)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
+                            <Bar
+                              dataKey="radar"
+                              fill="#e11d48"
+                              name="Radar"
+                              radius={[4, 4, 0, 0]}
+                              legendType="diamond"
+                              isAnimationActive={true}
+                              animationDuration={900}
+                            />
+                            <Bar dataKey="voltage" fill="#22d3ee" name="Voltage (V)" radius={[2, 2, 0, 0]} isAnimationActive={true} animationDuration={900} />
+                          </BarChart>
+                        )}
+                        {chartType === 'area' && (
+                          <AreaChart data={chartPageData}>
+                            <defs>
+                              <linearGradient id="tempArea" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                              <linearGradient id="voltArea" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                              </linearGradient>
+                              <linearGradient id="voltageArea" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" />
+                            <XAxis dataKey="time" stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <YAxis stroke="#6b7280" fontSize={10} tick={{ fill: '#6b7280' }} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: theme === 'dark' ? '#23272f' : '#fff', color: theme === 'dark' ? '#f3f4f6' : '#222', border: "1px solid #e2e8f0", borderRadius: '8px' }}
+                              formatter={(value, name, props) => {
+                                if (name === 'Radar') {
+                                  return [props.payload.radarLabel, 'Radar'];
+                                }
+                                return [value, name];
+                              }}
+                            />
+                            <Legend />
+                            <Area type="monotone" dataKey="temperature" stroke="#3b82f6" fill="url(#tempArea)" fillOpacity={1} name="Temperature (°C)" isAnimationActive={true} animationDuration={900} />
+                            <Area type="monotone" dataKey="humidity1" stroke="#10b981" fill="url(#voltArea)" fillOpacity={1} name="Humidity 1 (%)" isAnimationActive={true} animationDuration={900} />
+                            <Area
+                              type="stepAfter"
+                              dataKey="radar"
+                              stroke="#e11d48"
+                              strokeWidth={3}
+                              fill="#e11d48"
+                              fillOpacity={0.25}
+                              name="Radar"
+                              legendType="diamond"
+                              isAnimationActive={true}
+                              animationDuration={900}
+                            />
+                            <Area type="monotone" dataKey="voltage" stroke="#22d3ee" fill="url(#voltageArea)" fillOpacity={1} name="Voltage (V)" isAnimationActive={true} animationDuration={900} />
+                          </AreaChart>
+                        )}
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                </div>
+                {/* Custom Pagination Design */}
+                <div className="example small" style={{marginTop: 8, marginBottom: 4}}>
+                  <div className="text" style={{cursor: chartPage > 1 ? 'pointer' : 'not-allowed', color: chartPage > 1 ? '#6a558e' : '#bbb'}} onClick={() => handlePageChange(chartPage - 1)}>previous data</div>
+                  <div className="counter" style={{position: 'relative'}}>
+                    <span className="number" style={{fontFamily: 'Rowdies, cursive'}}>{String(chartPage).padStart(2, '0')}</span>
+                    <div className="background"></div>
+                    <span className="number" style={{fontFamily: 'Rowdies, cursive'}}>{String(chartTotalPages).padStart(2, '0')}</span>
+                  </div>
+                  <div className="text" style={{cursor: chartPage < chartTotalPages ? 'pointer' : 'not-allowed', color: chartPage < chartTotalPages ? '#6a558e' : '#bbb'}} onClick={() => handlePageChange(chartPage + 1)}>next data</div>
+                </div>
+                {/* End Custom Pagination Design */}
+              </>
+            );
+          })()}
         </section>
 
         {/* Recent Data Table */}
@@ -569,24 +801,48 @@ const Dashboard = () => {
                   <th>Date</th>
                   <th>Temperature (°C)</th>
                   <th>Humidity 1 (%)</th>
-                  
                   <th>Voltage (V)</th>
-
+                  <th>Active Button</th>
+                  <th>Human Present</th>
                 </tr>
               </thead>
-              <tbody>
-                {savedData.slice(-10).reverse().map((data, idx) => (
-                  <tr key={data.id || idx}>
-                    <td>{savedData.length - idx}</td>
-                    <td>{new Date(data.timestamp).toLocaleTimeString()}</td>
-                    <td>{new Date(data.timestamp).toLocaleDateString()}</td>
-                    <td>{data.temperature}</td>
-                    <td>{data.humidity1}</td>
-                    <td>{data.voltage}</td>
-                  </tr>
-                ))}
-              </tbody>
+              <AnimatePresence>
+                <tbody>
+                  {currentPageData.map((data, idx) => {
+                    let activeButton = [];
+                    if (data.button4) {
+                      activeButton.push('Manual off Button active');
+                    } else {
+                      if (data.button1) activeButton.push('Button 1');
+                      if (data.button2) activeButton.push('Button 2');
+                      if (data.button3) activeButton.push('Button 3');
+                    }
+                    const activeButtonDisplay = activeButton.length > 0 ? activeButton.join(', ') : 'No active buttons';
+                    return (
+                      <motion.tr
+                        key={data.id || idx}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <td>{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
+                        <td>{new Date(data.timestamp).toLocaleTimeString()}</td>
+                        <td>{new Date(data.timestamp).toLocaleDateString()}</td>
+                        <td>{data.temperature}</td>
+                        <td>{data.humidity1}</td>
+                        <td>{data.voltage}</td>
+                        <td>{activeButtonDisplay}</td>
+                        <td>{data.ld2410cHumanPresent === 1 || data.ld2410cHumanPresent === true || data.ld2410cHumanPresent === 'true' ? 'Yes' : 'No'}</td>
+                      </motion.tr>
+                    );
+                  })}
+                </tbody>
+              </AnimatePresence>
             </table>
+            <div className="pagination-controls">
+              <Pagination pages={totalPages} page={currentPage} onPageChange={handlePageChange} />
+            </div>
           </div>
         </section>
       </div>

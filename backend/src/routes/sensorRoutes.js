@@ -1,10 +1,9 @@
-
 const express = require('express');
 const router = express.Router();
 const sensorController = require('../controllers/sensorController');
 const commandController = require('../controllers/commandController');
 const buttonEventController = require('../controllers/buttonEventController');
-// GET /api/button-states - Return current button states for frontend
+// GET /api/button-states - Return current button states for frontend and ESP32
 router.get('/button-states', commandController.getButtonStates);
 
 // GET /api/sensor-data - Get historical sensor data

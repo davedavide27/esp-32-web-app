@@ -31,7 +31,7 @@ class SensorController {
   static async receiveSensorData(req, res) {
     try {
 
-      const { temperature1, humidity1, voltage, fanOn, motion, timestamp, button1, button2, button3, button4 } = req.body;
+      const { temperature1, humidity1, voltage, fanOn, motion, timestamp, button1, button2, button3, button4, ld2410cHumanPresent, led1, led2, led3 } = req.body;
 
       // Accept null values for sensor fields, only require fanOn and timestamp
       if (fanOn === undefined || timestamp === undefined) {
@@ -49,6 +49,10 @@ class SensorController {
         button2: button2 === true || button2 === 'true' ? 1 : 0,
         button3: button3 === true || button3 === 'true' ? 1 : 0,
         button4: button4 === true || button4 === 'true' ? 1 : 0,
+        ld2410cHumanPresent: ld2410cHumanPresent === true || ld2410cHumanPresent === 'true' ? 1 : 0,
+        led1: led1 === true || led1 === 'true' ? 1 : 0,
+        led2: led2 === true || led2 === 'true' ? 1 : 0,
+        led3: led3 === true || led3 === 'true' ? 1 : 0,
         timestamp: new Date() // Use server time
       };
 
