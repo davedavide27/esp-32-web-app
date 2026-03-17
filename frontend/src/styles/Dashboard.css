@@ -188,7 +188,8 @@
 .dashboard-root.dark .dashboard-table tr:nth-child(even) {
   background: #262a36;
 }
-# Responsive styles for table and pagination
+/* Responsive styles for table and pagination on smaller screens */
+
 @media (max-width: 600px) {
   .dashboard-table-section {
     padding: 0.5rem 0.2rem 0.2rem 0.2rem;

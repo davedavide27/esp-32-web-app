@@ -34,7 +34,7 @@ app.use('/api', sensorRoutes);
 // REST API route for historical data
 app.get('/api/sensor-data', async (req, res) => {
   try {
-    const data = await db('sensor_data').orderBy('timestamp', 'desc').limit(100);
+    const data = await db('sensor_data').orderBy('timestamp', 'desc');
     res.json(data.reverse()); // Reverse to show oldest first
   } catch (error) {
     console.error('Error fetching sensor data:', error);

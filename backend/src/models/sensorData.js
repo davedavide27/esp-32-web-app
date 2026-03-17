@@ -2,7 +2,7 @@ const db = require('../../config/database');
 
 class SensorData {
   static async getAll(limit = 100) {
-    return await db('sensor_data').orderBy('timestamp', 'desc').limit(limit);
+    return await db('sensor_data').orderBy('timestamp', 'desc');
   }
 
   static async create(data) {

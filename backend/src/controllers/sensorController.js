@@ -5,8 +5,7 @@ const LedState = require('../models/ledState');
 class SensorController {
   static async getSensorData(req, res) {
     try {
-      const limit = parseInt(req.query.limit) || 100;
-      const data = await SensorData.getAll(limit);
+      const data = await SensorData.getAll();
       res.json(data.reverse()); // Reverse to show oldest first
     } catch (error) {
       console.error('Error fetching sensor data:', error);
@@ -30,29 +29,35 @@ class SensorController {
 
   static async receiveSensorData(req, res) {
     try {
+      const { temperature, temperature1, humidity1, current, motion, timestamp, button1, button2, button3, button4, ld2410cHumanPresent, led1, led2, led3, controlMode } = req.body;
 
-      const { temperature1, humidity1, voltage, fanOn, motion, timestamp, button1, button2, button3, button4, ld2410cHumanPresent, led1, led2, led3 } = req.body;
+      // Accept null values for sensor fields, only require timestamp
+      if (timestamp === undefined) {
+        SocketService.emitError('Missing required field: timestamp');
+        return res.status(400).json({ error: 'Missing required field: timestamp' });
+      }
 
-      // Accept null values for sensor fields, only require fanOn and timestamp
-      if (fanOn === undefined || timestamp === undefined) {
-        return res.status(400).json({ error: 'Missing required fields: fanOn or timestamp' });
+      // Validate numeric fields
+      if ((temperature1 !== undefined && isNaN(temperature1)) || (humidity1 !== undefined && isNaN(humidity1)) || (current !== undefined && isNaN(current))) {
+        SocketService.emitError('Invalid numeric value in sensor data');
+        return res.status(400).json({ error: 'Invalid numeric value in sensor data' });
       }
 
       const data = {
-        temperature: temperature1 == null || isNaN(temperature1) ? null : parseFloat(temperature1),
+        temperature: temperature == null || isNaN(temperature) ? null : parseFloat(temperature),
         temperature1: temperature1 == null || isNaN(temperature1) ? null : parseFloat(temperature1),
         humidity1: humidity1 == null || isNaN(humidity1) ? null : parseFloat(humidity1),
-        voltage: voltage == null || isNaN(voltage) ? null : parseFloat(voltage),
-        fanOn: (fanOn === true || fanOn === 'true' || fanOn === 'on') ? 1 : 0,
+        current: current == null || isNaN(current) ? null : parseFloat(current),
         motion: motion === true || motion === 'true' ? 1 : 0,
         button1: button1 === true || button1 === 'true' ? 1 : 0,
         button2: button2 === true || button2 === 'true' ? 1 : 0,
         button3: button3 === true || button3 === 'true' ? 1 : 0,
         button4: button4 === true || button4 === 'true' ? 1 : 0,
-        ld2410cHumanPresent: ld2410cHumanPresent === true || ld2410cHumanPresent === 'true' ? 1 : 0,
+        ld2410cHumanPresent: ld2410cHumanPresent === true || ld2410cHumanPresent === 'true' || ld2410cHumanPresent === 1 || ld2410cHumanPresent === '1' ? 1 : 0,
         led1: led1 === true || led1 === 'true' ? 1 : 0,
         led2: led2 === true || led2 === 'true' ? 1 : 0,
         led3: led3 === true || led3 === 'true' ? 1 : 0,
+        controlMode: controlMode ? controlMode : 'automatic',
         timestamp: new Date() // Use server time
       };
 

@@ -3,6 +3,11 @@ const db = require('../../config/database');
 
 
 class SocketService {
+    static emitError(message) {
+      if (this.io) {
+        this.io.emit('esp32Error', { message });
+      }
+    }
   static esp32LastPing = null;
   static currentCommand = null;
   static ledStates = { led1: false, led2: false, led3: false };

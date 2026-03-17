@@ -141,6 +141,24 @@ class CommandController {
       res.status(500).json({ error: 'Internal server error' });
     }
   }
+
+  static async postAutomation(req, res) {
+    try {
+      const { enabled } = req.body;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'Missing or invalid enabled value' });
+      }
+      // Set command for ESP32
+      const action = enabled ? 'automation_on' : 'automation_off';
+      SocketService.setCommand(action);
+      // Notify connected frontends immediately via WebSocket
+      if (SocketService.io) SocketService.io.emit('commandUpdate', { action });
+      res.json({ message: `Automation ${enabled ? 'enabled' : 'disabled'}` });
+    } catch (error) {
+      console.error('Error setting automation:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = CommandController;

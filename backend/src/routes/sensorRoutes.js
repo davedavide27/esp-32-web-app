@@ -39,4 +39,7 @@ router.post('/button-event', buttonEventController.logButtonEvent);
 // GET /api/button-events - Fetch all button events
 router.get('/button-events', buttonEventController.getButtonEvents);
 
+// POST /api/automation - Enable/disable automation mode
+router.post('/automation', commandController.postAutomation);
+
 module.exports = router;
